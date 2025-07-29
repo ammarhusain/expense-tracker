@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:plaid.com)",
+      "Bash(ls:*)"
+    ],
+    "deny": []
+  }
+}
