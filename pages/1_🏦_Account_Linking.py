@@ -29,17 +29,6 @@ def plaid_link_page():
     
     st.subheader("🔗 Link New Account")
     
-    # Days requested setting
-    days_requested = st.number_input(
-        "📅 Historical Data Range (Days)",
-        min_value=90,
-        max_value=730,
-        value=730,
-        step=30,
-        help="How many days of historical transactions to request from Plaid (max 730 days / 24 months)"
-    )
-    
-    st.info(f"Will request {days_requested} days ({days_requested//30} months) of historical transaction data when linking accounts.")
     
     # Simplified approach - provide instructions to use FastAPI temporarily
     st.markdown("""
@@ -54,11 +43,9 @@ def plaid_link_page():
         if st.button("🔗 Get Link Token", type="primary"):
             try:
                 with st.spinner("Creating link token..."):
-                    link_token = plaid_client.create_link_token("user_1", days_requested=days_requested)
+                    link_token = plaid_client.create_link_token("user_1")
                     st.session_state['link_token'] = link_token
-                    st.session_state['days_requested'] = days_requested
                 st.success("✅ Link token created!")
-                st.info(f"Token configured for {days_requested} days of historical data")
             except Exception as e:
                 st.error(f"Error creating link token: {str(e)}")
     

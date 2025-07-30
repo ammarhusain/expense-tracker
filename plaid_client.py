@@ -47,6 +47,7 @@ class PlaidClient:
         return env_to_host.get(config.plaid_env, 'https://sandbox.plaid.com')
     
     def create_link_token(self, user_id: str) -> str:
+        # Create base request
         request = LinkTokenCreateRequest(
             products=[Products('transactions')],
             client_name="Personal Finance Tracker",
@@ -55,9 +56,17 @@ class PlaidClient:
             user=LinkTokenCreateRequestUser(client_user_id=user_id)
         )
         
-        # Add redirect URI for production environment
-        if config.plaid_env == 'production':
-            request.redirect_uri = 'http://localhost:8501'
+        # Note: redirect_uri only needed for OAuth institutions in production
+        # and must be configured in Plaid dashboard first
+        
+        # Manually add transactions to the request object's internal dictionary
+        # This bypasses the validation but allows us to set the parameter
+        if hasattr(request, '_data_types_map'):
+            # For newer SDK versions
+            request._data_types_map['transactions'] = dict
+        
+        # Set the transactions parameter directly
+        request.__dict__['transactions'] = {'days_requested': 20}
         
         response = self.client.link_token_create(request)
         return response['link_token']
@@ -176,13 +185,14 @@ class PlaidClient:
                 'merchant_name': transaction.get('merchant_name'),
                 'merchant_entity_id': transaction.get('merchant_entity_id'),
                 
-                # Categorization - prefer personal_finance_category over legacy category
-                'category': (transaction.get('personal_finance_category', {}).get('primary') if transaction.get('personal_finance_category') 
-                           else transaction['category'][0] if transaction.get('category') 
-                           else 'Other'),
-                'category_detailed': (transaction.get('personal_finance_category', {}).get('detailed') if transaction.get('personal_finance_category')
-                                    else ' > '.join(transaction['category']) if transaction.get('category')
-                                    else 'Other'),
+                # Legacy category fields
+                'category': transaction['category'][0] if transaction.get('category') else None,
+                'category_detailed': ' > '.join(transaction['category']) if transaction.get('category') else None,
+                
+                # Personal finance category fields
+                'personal_finance_category': transaction.get('personal_finance_category', {}).get('primary') if transaction.get('personal_finance_category') else None,
+                'personal_finance_category_detailed': transaction.get('personal_finance_category', {}).get('detailed') if transaction.get('personal_finance_category') else None,
+                'personal_finance_category_confidence': transaction.get('personal_finance_category', {}).get('confidence_level') if transaction.get('personal_finance_category') else None,
                 
                 # Transaction metadata
                 'transaction_type': safe_str(transaction.get('transaction_type')),
