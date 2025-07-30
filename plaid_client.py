@@ -1,5 +1,6 @@
 from plaid.api import plaid_api
 from plaid.model.transactions_get_request import TransactionsGetRequest
+from plaid.model.transactions_sync_request import TransactionsSyncRequest
 from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
@@ -127,20 +128,7 @@ class PlaidClient:
         
         formatted_transactions = []
         
-        # DEBUG: Save ALL transactions to see raw structure
-        import json
-        import os
-        debug_dir = "data/debug"
-        os.makedirs(debug_dir, exist_ok=True)
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        
         for i, transaction in enumerate(transactions):
-            # Convert transaction to dict for JSON serialization
-            transaction_dict = dict(transaction) if hasattr(transaction, 'items') else transaction
-            
-            with open(f"{debug_dir}/raw_transaction_{timestamp}_{i:04d}.json", 'w') as f:
-                json.dump(transaction_dict, f, indent=2, default=str)
-            
             # Extract location data if available and combine into single field
             location_parts = []
             if hasattr(transaction, 'location') and transaction.location:
@@ -238,3 +226,240 @@ class PlaidClient:
             formatted_transactions.append(formatted_transaction)
         
         return formatted_transactions
+    
+    def transactions_sync(self, access_token: str, cursor: Optional[str] = None) -> Dict:
+        """
+        Sync transactions using Plaid's sync API with cursor-based pagination
+        
+        Args:
+            access_token: The access token for the account
+            cursor: The sync cursor from previous sync (None for initial sync)
+            
+        Returns:
+            Dict containing:
+            - transactions: List of formatted transactions
+            - added: Number of added transactions
+            - modified: Number of modified transactions  
+            - removed: List of removed transaction IDs
+            - next_cursor: Cursor for next sync
+            - has_more: Boolean indicating if more data available
+        """
+        request_params = {
+            'access_token': access_token
+        }
+        
+        if cursor:
+            request_params['cursor'] = cursor
+            
+        request = TransactionsSyncRequest(**request_params)
+        response = self.client.transactions_sync(request)
+        
+        # Format the transactions using the same logic as get_transactions
+        formatted_transactions = []
+        
+        for transaction in response['added']:
+            # Extract location data if available and combine into single field
+            location_parts = []
+            if hasattr(transaction, 'location') and transaction.location:
+                location = transaction.location
+                if location.get('address'):
+                    location_parts.append(location.get('address'))
+                if location.get('city'):
+                    location_parts.append(location.get('city'))
+                if location.get('region'):
+                    location_parts.append(location.get('region'))
+                if location.get('postal_code'):
+                    location_parts.append(location.get('postal_code'))
+                if location.get('country'):
+                    location_parts.append(location.get('country'))
+                # Add coordinates with lat/lon prefixes
+                if location.get('lat') and location.get('lon'):
+                    location_parts.append(f"lat {location.get('lat')} lon {location.get('lon')}")
+                if location.get('store_number'):
+                    location_parts.append(f"Store #{location.get('store_number')}")
+            
+            location_string = ', '.join(location_parts) if location_parts else None
+            
+            # Extract payment meta if available
+            payment_meta = {}
+            if hasattr(transaction, 'payment_meta') and transaction.payment_meta:
+                payment_meta = {
+                    'reference_number': transaction.payment_meta.get('reference_number'),
+                    'ppd_id': transaction.payment_meta.get('ppd_id'),
+                    'payee': transaction.payment_meta.get('payee'),
+                    'by_order_of': transaction.payment_meta.get('by_order_of'),
+                    'payer': transaction.payment_meta.get('payer'),
+                    'payment_method': transaction.payment_meta.get('payment_method'),
+                    'payment_processor': transaction.payment_meta.get('payment_processor'),
+                    'reason': transaction.payment_meta.get('reason')
+                }
+            
+            formatted_transaction = {
+                # Core transaction data
+                'transaction_id': transaction['transaction_id'],
+                'account_id': transaction['account_id'],
+                'amount': transaction['amount'],  # Positive = money out, Negative = money in
+                'iso_currency_code': transaction.get('iso_currency_code', 'USD'),
+                'unofficial_currency_code': transaction.get('unofficial_currency_code'),
+                
+                # Date information
+                'date': safe_date(transaction['date']),
+                'authorized_date': safe_date(transaction.get('authorized_date')),
+                
+                # Transaction identifiers and descriptions
+                'name': transaction['name'],  # Primary transaction description
+                'original_description': transaction.get('original_description'),  # Raw bank description
+                'merchant_name': transaction.get('merchant_name'),
+                'merchant_entity_id': transaction.get('merchant_entity_id'),
+                
+                # Categorization - prefer personal_finance_category over legacy category
+                'category': (transaction.get('personal_finance_category', {}).get('primary') if transaction.get('personal_finance_category') 
+                           else transaction['category'][0] if transaction.get('category') 
+                           else 'Other'),
+                'category_detailed': (transaction.get('personal_finance_category', {}).get('detailed') if transaction.get('personal_finance_category')
+                                    else ' > '.join(transaction['category']) if transaction.get('category')
+                                    else 'Other'),
+                
+                # Transaction metadata
+                'transaction_type': safe_str(transaction.get('transaction_type')),
+                'transaction_code': safe_str(transaction.get('transaction_code')),
+                'check_number': transaction.get('check_number'),
+                'pending': transaction.get('pending', False),
+                'pending_transaction_id': transaction.get('pending_transaction_id'),
+                'account_owner': transaction.get('account_owner'),
+                
+                # Combined location data
+                'location': location_string,
+                
+                # Payment metadata (flattened for CSV)
+                'payment_reference_number': payment_meta.get('reference_number'),
+                'payment_ppd_id': payment_meta.get('ppd_id'),
+                'payment_payee': payment_meta.get('payee'),
+                'payment_by_order_of': payment_meta.get('by_order_of'),
+                'payment_payer': payment_meta.get('payer'),
+                'payment_method': payment_meta.get('payment_method'),
+                'payment_processor': payment_meta.get('payment_processor'),
+                'payment_reason': payment_meta.get('reason'),
+                
+                # Additional fields that might be useful
+                'website': transaction.get('website'),
+                'logo_url': transaction.get('logo_url'),
+                'subaccount_id': transaction.get('subaccount_id'),
+                
+                # Custom fields for our categorization
+                'custom_category': None,  # For manual overrides
+                'notes': None,  # For user notes
+                'tags': None   # For user tags
+            }
+            
+            formatted_transactions.append(formatted_transaction)
+        
+        # Handle modified transactions (same format)
+        # For now, we'll include modified transactions in the main transactions array
+        # since the sync_service expects them there
+        
+        for transaction in response['modified']:
+            # Extract location data if available and combine into single field
+            location_parts = []
+            if hasattr(transaction, 'location') and transaction.location:
+                location = transaction.location
+                if location.get('address'):
+                    location_parts.append(location.get('address'))
+                if location.get('city'):
+                    location_parts.append(location.get('city'))
+                if location.get('region'):
+                    location_parts.append(location.get('region'))
+                if location.get('postal_code'):
+                    location_parts.append(location.get('postal_code'))
+                if location.get('country'):
+                    location_parts.append(location.get('country'))
+                # Add coordinates with lat/lon prefixes
+                if location.get('lat') and location.get('lon'):
+                    location_parts.append(f"lat {location.get('lat')} lon {location.get('lon')}")
+                if location.get('store_number'):
+                    location_parts.append(f"Store #{location.get('store_number')}")
+            
+            location_string = ', '.join(location_parts) if location_parts else None
+            
+            # Extract payment meta if available
+            payment_meta = {}
+            if hasattr(transaction, 'payment_meta') and transaction.payment_meta:
+                payment_meta = {
+                    'reference_number': transaction.payment_meta.get('reference_number'),
+                    'ppd_id': transaction.payment_meta.get('ppd_id'),
+                    'payee': transaction.payment_meta.get('payee'),
+                    'by_order_of': transaction.payment_meta.get('by_order_of'),
+                    'payer': transaction.payment_meta.get('payer'),
+                    'payment_method': transaction.payment_meta.get('payment_method'),
+                    'payment_processor': transaction.payment_meta.get('payment_processor'),
+                    'reason': transaction.payment_meta.get('reason')
+                }
+            
+            formatted_transaction = {
+                # Core transaction data
+                'transaction_id': transaction['transaction_id'],
+                'account_id': transaction['account_id'],
+                'amount': transaction['amount'],  # Positive = money out, Negative = money in
+                'iso_currency_code': transaction.get('iso_currency_code', 'USD'),
+                'unofficial_currency_code': transaction.get('unofficial_currency_code'),
+                
+                # Date information
+                'date': safe_date(transaction['date']),
+                'authorized_date': safe_date(transaction.get('authorized_date')),
+                
+                # Transaction identifiers and descriptions
+                'name': transaction['name'],  # Primary transaction description
+                'original_description': transaction.get('original_description'),  # Raw bank description
+                'merchant_name': transaction.get('merchant_name'),
+                'merchant_entity_id': transaction.get('merchant_entity_id'),
+                
+                # Categorization - prefer personal_finance_category over legacy category
+                'category': (transaction.get('personal_finance_category', {}).get('primary') if transaction.get('personal_finance_category') 
+                           else transaction['category'][0] if transaction.get('category') 
+                           else 'Other'),
+                'category_detailed': (transaction.get('personal_finance_category', {}).get('detailed') if transaction.get('personal_finance_category')
+                                    else ' > '.join(transaction['category']) if transaction.get('category')
+                                    else 'Other'),
+                
+                # Transaction metadata
+                'transaction_type': safe_str(transaction.get('transaction_type')),
+                'transaction_code': safe_str(transaction.get('transaction_code')),
+                'check_number': transaction.get('check_number'),
+                'pending': transaction.get('pending', False),
+                'pending_transaction_id': transaction.get('pending_transaction_id'),
+                'account_owner': transaction.get('account_owner'),
+                
+                # Combined location data
+                'location': location_string,
+                
+                # Payment metadata (flattened for CSV)
+                'payment_reference_number': payment_meta.get('reference_number'),
+                'payment_ppd_id': payment_meta.get('ppd_id'),
+                'payment_payee': payment_meta.get('payee'),
+                'payment_by_order_of': payment_meta.get('by_order_of'),
+                'payment_payer': payment_meta.get('payer'),
+                'payment_method': payment_meta.get('payment_method'),
+                'payment_processor': payment_meta.get('payment_processor'),
+                'payment_reason': payment_meta.get('reason'),
+                
+                # Additional fields that might be useful
+                'website': transaction.get('website'),
+                'logo_url': transaction.get('logo_url'),
+                'subaccount_id': transaction.get('subaccount_id'),
+                
+                # Custom fields for our categorization
+                'custom_category': None,  # For manual overrides
+                'notes': None,  # For user notes
+                'tags': None   # For user tags
+            }
+            
+            formatted_transactions.append(formatted_transaction)
+        
+        return {
+            'transactions': formatted_transactions,
+            'added': len(response['added']),
+            'modified': len(response['modified']),
+            'removed': response['removed'],
+            'next_cursor': response['next_cursor'],
+            'has_more': response['has_more']
+        }

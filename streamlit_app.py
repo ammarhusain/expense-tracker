@@ -17,7 +17,6 @@ st.set_page_config(
 )
 
 # Initialize services
-@st.cache_resource
 def get_services():
     return DataManager(), TransactionSyncService()
 

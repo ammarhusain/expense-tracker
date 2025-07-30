@@ -143,7 +143,7 @@ class TransactionSyncService:
                 
                 # Fetch all transactions using cursor pagination
                 while True:
-                    response = self.plaid_client.get_transactions(
+                    response = self.plaid_client.transactions_sync(
                         access_token=access_token,
                         cursor=cursor
                     )
@@ -228,7 +228,7 @@ class TransactionSyncService:
             
             # Fetch all transactions using cursor pagination
             while True:
-                response = self.plaid_client.get_transactions(
+                response = self.plaid_client.transactions_sync(
                     access_token=access_token,
                     cursor=cursor
                 )
