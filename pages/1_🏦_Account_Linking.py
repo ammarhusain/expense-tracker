@@ -29,6 +29,18 @@ def plaid_link_page():
     
     st.subheader("🔗 Link New Account")
     
+    # Days requested setting
+    days_requested = st.number_input(
+        "📅 Historical Data Range (Days)",
+        min_value=90,
+        max_value=730,
+        value=730,
+        step=30,
+        help="How many days of historical transactions to request from Plaid (max 730 days / 24 months)"
+    )
+    
+    st.info(f"Will request {days_requested} days ({days_requested//30} months) of historical transaction data when linking accounts.")
+    
     # Simplified approach - provide instructions to use FastAPI temporarily
     st.markdown("""
     **Quick Setup Instructions:**
@@ -42,10 +54,11 @@ def plaid_link_page():
         if st.button("🔗 Get Link Token", type="primary"):
             try:
                 with st.spinner("Creating link token..."):
-                    link_token = plaid_client.create_link_token("user_1")
+                    link_token = plaid_client.create_link_token("user_1", days_requested=days_requested)
                     st.session_state['link_token'] = link_token
+                    st.session_state['days_requested'] = days_requested
                 st.success("✅ Link token created!")
-                st.info("Use the link token below with the Plaid Link demo")
+                st.info(f"Token configured for {days_requested} days of historical data")
             except Exception as e:
                 st.error(f"Error creating link token: {str(e)}")
     
@@ -241,20 +254,23 @@ def plaid_link_page():
     st.markdown("---")
     st.subheader("🔄 Sync Transactions")
     
+    st.info("💡 **New Cursor-Based Sync**: Uses efficient incremental updates - first sync gets all historical data, subsequent syncs only get changes.")
+    
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("**Recent Transactions**")
-        if st.button("Sync All Connected Accounts", type="secondary"):
-            with st.spinner("Syncing recent transactions..."):
-                result = sync_service.sync_all_accounts()
+        st.markdown("**Incremental Sync** (Recommended)")
+        st.caption("Gets only new/changed transactions since last sync")
+        if st.button("🔄 Incremental Sync", type="primary"):
+            with st.spinner("Syncing new transactions..."):
+                result = sync_service.sync_all_accounts(full_sync=False)
                 
                 if result.get('errors'):
                     st.error(f"Sync errors: {', '.join(result['errors'])}")
                 if result.get('info'):
                     st.warning(result['info'])
                 if result.get('total_new_transactions', 0) > 0 or result.get('accounts_synced', 0) > 0:
-                    st.success(f"✅ Successfully synced {result.get('total_new_transactions', 0)} new transactions from {result.get('accounts_synced', 0)} accounts!")
+                    st.success(f"✅ Synced {result.get('total_new_transactions', 0)} new, {result.get('total_modified_transactions', 0)} modified, {result.get('total_removed_transactions', 0)} removed transactions from {result.get('accounts_synced', 0)} accounts!")
                 else:
                     st.info("No new transactions found or all accounts were rate limited.")
                     
@@ -262,41 +278,33 @@ def plaid_link_page():
                 if result.get('account_details'):
                     with st.expander("📊 Sync Details"):
                         for bank, details in result['account_details'].items():
-                            st.write(f"**{bank}**: {details['new_transactions']} new transactions (of {details['total_transactions_fetched']} fetched)")
+                            st.write(f"**{bank}**: Added: {details.get('added', 0)}, Modified: {details.get('modified', 0)}, Removed: {details.get('removed', 0)}")
     
     with col2:
-        st.markdown("**Historical Transactions**")
+        st.markdown("**Full Sync**")
+        st.caption("Re-fetches all available historical data")
         
-        # Historical sync options
-        months_back = st.selectbox(
-            "Import historical data:",
-            options=[3, 6, 12, 24],
-            index=2,  # Default to 12 months
-            format_func=lambda x: f"Last {x} months",
-            help="Note: Plaid typically provides up to 24 months of historical data"
-        )
-        
-        if st.button("🗂️ Import Historical Data", type="primary"):
-            with st.spinner(f"Importing {months_back} months of historical transactions..."):
-                result = sync_service.sync_historical_transactions(months_back=months_back)
+        if st.button("🗂️ Full Historical Sync", type="secondary"):
+            with st.spinner("Performing full sync of all historical data..."):
+                result = sync_service.sync_all_accounts(full_sync=True)
                 
                 if result.get('errors'):
-                    st.error(f"Import errors: {', '.join(result['errors'])}")
+                    st.error(f"Sync errors: {', '.join(result['errors'])}")
                 if result.get('info'):
                     st.warning(result['info'])
                 if result.get('total_new_transactions', 0) > 0:
-                    st.success(f"🎉 Successfully imported {result.get('total_new_transactions', 0)} historical transactions from {result.get('accounts_synced', 0)} accounts!")
-                    st.info("Historical data import complete! Check your dashboard for the full transaction history.")
+                    st.success(f"🎉 Full sync complete: {result.get('total_new_transactions', 0)} new, {result.get('total_modified_transactions', 0)} modified, {result.get('total_removed_transactions', 0)} removed transactions from {result.get('accounts_synced', 0)} accounts!")
+                    st.info("Historical data sync complete! Check your dashboard for the full transaction history.")
                 else:
-                    st.info("No historical transactions found or all accounts were rate limited.")
+                    st.info("No transactions found or all accounts were rate limited.")
                 
-                # Show import details
+                # Show sync details
                 if result.get('account_details'):
-                    with st.expander("📊 Import Details"):
+                    with st.expander("📊 Sync Details"):
                         for bank, details in result['account_details'].items():
-                            st.write(f"**{bank}**: {details['new_transactions']} new transactions (of {details['total_transactions_fetched']} fetched)")
+                            st.write(f"**{bank}**: Added: {details.get('added', 0)}, Modified: {details.get('modified', 0)}, Removed: {details.get('removed', 0)}")
     
-    st.info("💡 **Tip**: Use 'Recent Transactions' for daily updates and 'Historical Data' for the initial import of past transactions.")
+    st.info("💡 **Tip**: Use 'Incremental Sync' for daily updates. Use 'Full Sync' only when you need to refresh all data or after linking new accounts.")
 
 if __name__ == "__main__":
     plaid_link_page()

@@ -16,15 +16,12 @@ class DataManager:
         if not os.path.exists(self.csv_path):
             # Define comprehensive CSV columns
             columns = [
-                'date', 'authorized_date', 'transaction_id', 'account_id',
-                'amount', 'iso_currency_code', 'name', 'original_description',
-                'merchant_name', 'merchant_entity_id', 'category', 'category_detailed',
-                'category_id', 'transaction_type', 'transaction_code', 'check_number', 'pending',
-                'pending_transaction_id', 'account_owner', 'location',
-                'payment_reference_number', 'payment_ppd_id', 'payment_payee',
-                'payment_by_order_of', 'payment_payer', 'payment_method',
-                'payment_processor', 'payment_reason', 'website', 'logo_url',
-                'subaccount_id', 'custom_category', 'notes', 'tags', 'bank_name', 'created_at'
+                'date', 'name', 'merchant_name', 'original_description', 
+                'amount','category', 'category_detailed',
+                'personal_finance_category', 'personal_finance_category_detailed', 'personal_finance_category_confidence',
+                'transaction_type', 'currency', 'pending',
+                'location', 'payment_details', 'website',
+                'custom_category', 'notes', 'tags', 'bank_name', 'account_name', 'created_at', 'transaction_id', 'account_id', 'check_number'
             ]
             
             df = pd.DataFrame(columns=columns)
@@ -104,6 +101,24 @@ class DataManager:
         
         return False
 
+    def remove_transactions(self, transaction_ids: List[str]) -> int:
+        """Remove transactions by their IDs"""
+        if not transaction_ids:
+            return 0
+        
+        df = self.read_transactions()
+        if df.empty:
+            return 0
+        
+        initial_count = len(df)
+        df = df[~df['transaction_id'].isin(transaction_ids)]
+        removed_count = initial_count - len(df)
+        
+        if removed_count > 0:
+            df.to_csv(self.csv_path, index=False)
+            self.logger.info(f"Removed {removed_count} transactions")
+        
+        return removed_count
     def add_transactions(self, transactions: List[Dict]) -> int:
         """Add new transactions to CSV, avoiding duplicates and handling pending->confirmed transitions"""
         if not transactions:

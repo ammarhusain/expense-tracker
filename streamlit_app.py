@@ -64,18 +64,37 @@ with st.sidebar:
     
     # Account Management
     st.subheader("Account Management")
-    if st.button("🔄 Sync Transactions", type="primary"):
-        with st.spinner("Syncing transactions..."):
-            result = sync_service.sync_all_accounts()
-            if result.get('errors'):
-                st.error(f"Sync errors: {', '.join(result['errors'])}")
-            if result.get('info'):
-                st.warning(result['info'])
-            if result.get('total_new_transactions', 0) > 0 or result.get('accounts_synced', 0) > 0:
-                st.success(f"✅ Synced {result.get('total_new_transactions', 0)} new transactions from {result.get('accounts_synced', 0)} accounts")
-            if not result.get('errors') and not result.get('total_new_transactions', 0):
-                st.info("No new transactions found or rate limited.")
-            st.rerun()
+    
+    # Sync options
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🔄 Incremental Sync", type="primary", help="Fetch only new transactions since last sync"):
+            with st.spinner("Syncing new transactions..."):
+                result = sync_service.sync_all_accounts(full_sync=False)
+                if result.get('errors'):
+                    st.error(f"Sync errors: {', '.join(result['errors'])}")
+                if result.get('info'):
+                    st.warning(result['info'])
+                if result.get('total_new_transactions', 0) > 0 or result.get('accounts_synced', 0) > 0:
+                    st.success(f"✅ Synced {result.get('total_new_transactions', 0)} new, {result.get('total_modified_transactions', 0)} modified, {result.get('total_removed_transactions', 0)} removed transactions from {result.get('accounts_synced', 0)} accounts")
+                if not result.get('errors') and not result.get('total_new_transactions', 0):
+                    st.info("No new transactions found or rate limited.")
+                st.rerun()
+    
+    with col2:
+        if st.button("🔄 Full Sync", type="secondary", help="Re-fetch all historical transactions"):
+            with st.spinner("Performing full sync..."):
+                result = sync_service.sync_all_accounts(full_sync=True)
+                if result.get('errors'):
+                    st.error(f"Sync errors: {', '.join(result['errors'])}")
+                if result.get('info'):
+                    st.warning(result['info'])
+                if result.get('total_new_transactions', 0) > 0 or result.get('accounts_synced', 0) > 0:
+                    st.success(f"✅ Full sync: {result.get('total_new_transactions', 0)} new, {result.get('total_modified_transactions', 0)} modified, {result.get('total_removed_transactions', 0)} removed transactions from {result.get('accounts_synced', 0)} accounts")
+                if not result.get('errors') and not result.get('total_new_transactions', 0):
+                    st.info("No transactions found or rate limited.")
+                st.rerun()
     
     # Connected accounts info
     accounts = sync_service.get_connected_accounts()

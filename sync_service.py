@@ -44,7 +44,8 @@ class TransactionSyncService:
             "access_token": access_token,
             "account_info": serializable_account_info,
             "created_at": datetime.now().isoformat(),
-            "last_sync": None  # Track when we last synced
+            "last_sync": None,  # Track when we last synced
+            "cursor": None  # Track sync cursor for transactions/sync API
         }
         
         with open(self.access_tokens_file, 'w') as f:
@@ -84,35 +85,33 @@ class TransactionSyncService:
         
         return True, "OK to sync"
     
-    def update_last_sync_time(self, institution_name: str):
-        """Update the last sync time for an institution"""
+    def update_last_sync_time(self, institution_name: str, cursor: Optional[str] = None):
+        """Update the last sync time and cursor for an institution"""
         tokens = self.load_access_tokens()
         if institution_name in tokens:
             tokens[institution_name]['last_sync'] = datetime.now().isoformat()
+            if cursor:
+                tokens[institution_name]['cursor'] = cursor
             with open(self.access_tokens_file, 'w') as f:
                 json.dump(tokens, f, indent=2)
     
-    def sync_all_accounts(self, days_back: int = 30, force_start_date: datetime = None) -> Dict:
-        """Sync transactions from all connected accounts"""
+    def sync_all_accounts(self, full_sync: bool = False) -> Dict:
+        """Sync transactions from all connected accounts using cursor-based pagination"""
         tokens = self.load_access_tokens()
         if not tokens:
             return {"error": "No bank accounts connected. Please link your accounts first."}
         
         results = {
             "total_new_transactions": 0,
+            "total_modified_transactions": 0,
+            "total_removed_transactions": 0,
             "accounts_synced": 0,
             "errors": [],
             "account_details": {},
             "rate_limited": []
         }
         
-        end_date = datetime.now()
-        if force_start_date:
-            start_date = force_start_date
-        else:
-            start_date = self.data_manager.get_last_sync_date() or (end_date - timedelta(days=days_back))
-        
-        self.logger.info(f"Syncing transactions from {start_date} to {end_date}")
+        self.logger.info("Starting transaction sync using cursor-based pagination")
         
         for institution_name, token_data in tokens.items():
             # Check rate limiting
@@ -123,6 +122,7 @@ class TransactionSyncService:
                 
             try:
                 access_token = token_data["access_token"]
+                cursor = None if full_sync else token_data.get("cursor")
                 
                 # Add delay between API calls to avoid rate limits
                 time.sleep(1)
@@ -130,35 +130,70 @@ class TransactionSyncService:
                 # Get account info
                 accounts = self.plaid_client.get_accounts(access_token)
                 
+                # Create mapping from account_id to account name
+                account_id_to_name = {acc['account_id']: acc['name'] for acc in accounts}
+                
                 # Add delay before transactions call
                 time.sleep(1)
                 
-                # Get transactions
-                transactions = self.plaid_client.get_transactions(
-                    access_token=access_token,
-                    start_date=start_date,
-                    end_date=end_date
-                )
+                all_transactions = []
+                total_added = 0
+                total_modified = 0
+                total_removed = 0
                 
-                # Add bank identifier to transactions
-                for transaction in transactions:
-                    transaction['bank_name'] = institution_name
+                # Fetch all transactions using cursor pagination
+                while True:
+                    response = self.plaid_client.get_transactions(
+                        access_token=access_token,
+                        cursor=cursor
+                    )
+                    
+                    transactions = response['transactions']
+                    
+                    # Add bank identifier and account name to transactions
+                    for transaction in transactions:
+                        transaction['bank_name'] = institution_name
+                        transaction['account_name'] = account_id_to_name.get(transaction['account_id'], 'Unknown Account')
+                    
+                    all_transactions.extend(transactions)
+                    total_added += response['added']
+                    total_modified += response['modified']
+                    total_removed += len(response['removed'])
+                    
+                    # Handle removed transactions
+                    if response['removed']:
+                        self.data_manager.remove_transactions(response['removed'])
+                    
+                    # Update cursor for next iteration
+                    cursor = response['next_cursor']
+                    
+                    # Break if no more data
+                    if not response['has_more']:
+                        break
+                    
+                    # Add small delay between paginated requests
+                    time.sleep(0.5)
                 
-                # Save to CSV
-                new_count = self.data_manager.add_transactions(transactions)
+                # Save new/modified transactions to CSV
+                new_count = self.data_manager.add_transactions(all_transactions)
                 
-                # Update last sync time
-                self.update_last_sync_time(institution_name)
+                # Update last sync time and cursor
+                self.update_last_sync_time(institution_name, cursor)
                 
                 results["total_new_transactions"] += new_count
+                results["total_modified_transactions"] += total_modified
+                results["total_removed_transactions"] += total_removed
                 results["accounts_synced"] += 1
                 results["account_details"][institution_name] = {
                     "accounts": len(accounts),
                     "new_transactions": new_count,
-                    "total_transactions_fetched": len(transactions)
+                    "total_transactions_fetched": len(all_transactions),
+                    "added": total_added,
+                    "modified": total_modified,
+                    "removed": total_removed
                 }
                 
-                self.logger.info(f"Synced {new_count} new transactions from {institution_name}")
+                self.logger.info(f"Synced {institution_name}: {new_count} new, {total_modified} modified, {total_removed} removed")
                 
             except Exception as e:
                 error_msg = f"Error syncing {institution_name}: {str(e)}"
@@ -171,8 +206,8 @@ class TransactionSyncService:
         
         return results
     
-    def sync_specific_account(self, institution_name: str, days_back: int = 30, force_start_date: datetime = None) -> Dict:
-        """Sync transactions from a specific account"""
+    def sync_specific_account(self, institution_name: str, full_sync: bool = False) -> Dict:
+        """Sync transactions from a specific account using cursor-based pagination"""
         tokens = self.load_access_tokens()
         
         if institution_name not in tokens:
@@ -180,35 +215,63 @@ class TransactionSyncService:
         
         try:
             access_token = tokens[institution_name]["access_token"]
+            cursor = None if full_sync else tokens[institution_name].get("cursor")
             
-            end_date = datetime.now()
-            if force_start_date:
-                start_date = force_start_date
-            else:
-                start_date = self.data_manager.get_last_sync_date() or (end_date - timedelta(days=days_back))
+            # Get account info for name mapping
+            accounts = self.plaid_client.get_accounts(access_token)
+            account_id_to_name = {acc['account_id']: acc['name'] for acc in accounts}
             
-            # Get transactions
-            transactions = self.plaid_client.get_transactions(
-                access_token=access_token,
-                start_date=start_date,
-                end_date=end_date
-            )
+            all_transactions = []
+            total_added = 0
+            total_modified = 0
+            total_removed = 0
             
-            # Add bank identifier
-            for transaction in transactions:
-                transaction['bank_name'] = institution_name
+            # Fetch all transactions using cursor pagination
+            while True:
+                response = self.plaid_client.get_transactions(
+                    access_token=access_token,
+                    cursor=cursor
+                )
+                
+                transactions = response['transactions']
+                
+                # Add bank identifier and account name
+                for transaction in transactions:
+                    transaction['bank_name'] = institution_name
+                    transaction['account_name'] = account_id_to_name.get(transaction['account_id'], 'Unknown Account')
+                
+                all_transactions.extend(transactions)
+                total_added += response['added']
+                total_modified += response['modified']
+                total_removed += len(response['removed'])
+                
+                # Handle removed transactions
+                if response['removed']:
+                    self.data_manager.remove_transactions(response['removed'])
+                
+                # Update cursor for next iteration
+                cursor = response['next_cursor']
+                
+                # Break if no more data
+                if not response['has_more']:
+                    break
+                
+                # Add small delay between paginated requests
+                time.sleep(0.5)
             
             # Save to CSV
-            new_count = self.data_manager.add_transactions(transactions)
+            new_count = self.data_manager.add_transactions(all_transactions)
+            
+            # Update cursor
+            self.update_last_sync_time(institution_name, cursor)
             
             return {
                 "institution": institution_name,
                 "new_transactions": new_count,
-                "total_transactions_fetched": len(transactions),
-                "date_range": {
-                    "start": start_date.isoformat(),
-                    "end": end_date.isoformat()
-                }
+                "total_transactions_fetched": len(all_transactions),
+                "added": total_added,
+                "modified": total_modified,
+                "removed": total_removed
             }
             
         except Exception as e:
@@ -247,11 +310,8 @@ class TransactionSyncService:
         
         return accounts_info
     
-    def sync_historical_transactions(self, months_back: int = 24) -> Dict:
-        """Sync historical transactions going back specified months"""
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=months_back * 30)  # Approximate months to days
+    def sync_historical_transactions(self, full_sync: bool = True) -> Dict:
+        """Sync all historical transactions using cursor-based pagination"""        
+        self.logger.info("Starting full historical sync using cursor-based pagination")
         
-        self.logger.info(f"Starting historical sync from {start_date.date()} to {end_date.date()}")
-        
-        return self.sync_all_accounts(force_start_date=start_date)
+        return self.sync_all_accounts(full_sync=full_sync)

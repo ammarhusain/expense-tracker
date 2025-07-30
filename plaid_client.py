@@ -126,7 +126,21 @@ class PlaidClient:
             transactions.extend(response['transactions'])
         
         formatted_transactions = []
-        for transaction in transactions:
+        
+        # DEBUG: Save ALL transactions to see raw structure
+        import json
+        import os
+        debug_dir = "data/debug"
+        os.makedirs(debug_dir, exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        for i, transaction in enumerate(transactions):
+            # Convert transaction to dict for JSON serialization
+            transaction_dict = dict(transaction) if hasattr(transaction, 'items') else transaction
+            
+            with open(f"{debug_dir}/raw_transaction_{timestamp}_{i:04d}.json", 'w') as f:
+                json.dump(transaction_dict, f, indent=2, default=str)
+            
             # Extract location data if available and combine into single field
             location_parts = []
             if hasattr(transaction, 'location') and transaction.location:
