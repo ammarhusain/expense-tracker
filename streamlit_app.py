@@ -62,28 +62,92 @@ st.markdown('<h1 class="main-header">💰 Personal Finance Tracker</h1>', unsafe
 with st.expander("🔧 Account Management", expanded=False):
     st.subheader("Sync Options")
     
+    # Get connected accounts for dropdown
+    accounts = sync_service.get_connected_accounts()
+    account_options = ["All Accounts"]
+    
+    if accounts and not accounts.get('message'):
+        for bank_name in accounts.keys():
+            if 'accounts' in accounts[bank_name]:
+                account_options.append(bank_name)
+    
+    # Account selection dropdown
+    selected_account = st.selectbox(
+        "Select Account to Sync",
+        options=account_options,
+        index=0,
+        help="Choose which account to sync, or 'All Accounts' to sync everything"
+    )
+    
     # Sync options
     col1, col2 = st.columns(2)
     
     with col1:
         if st.button("🔄 Incremental Sync", type="primary", help="Fetch only new transactions since last sync"):
-            with st.spinner("Syncing new transactions..."):
-                result = sync_service.sync_all_accounts(full_sync=False)
+            with st.spinner(f"Syncing new transactions for {selected_account}..."):
+                if selected_account == "All Accounts":
+                    result = sync_service.sync_all_accounts(full_sync=False)
+                else:
+                    result = sync_service.sync_specific_account(selected_account, full_sync=False)
                 st.write(result)
     
     with col2:
         if st.button("🔄 Full Sync", type="secondary", help="Re-fetch all historical transactions"):
-            with st.spinner("Performing full sync..."):
-                result = sync_service.sync_all_accounts(full_sync=True)
+            with st.spinner(f"Performing full sync for {selected_account}..."):
+                if selected_account == "All Accounts":
+                    result = sync_service.sync_all_accounts(full_sync=True)
+                else:
+                    result = sync_service.sync_specific_account(selected_account, full_sync=True)
                 st.write(result)
     
     # Connected accounts info
     st.subheader("Connected Accounts")
-    accounts = sync_service.get_connected_accounts()
     if accounts and not accounts.get('message'):
+        # Get access tokens data for additional info
+        tokens_data = sync_service.load_access_tokens()
+        
         for bank, info in accounts.items():
             if 'accounts' in info:
                 st.write(f"**{bank}**: {len(info['accounts'])} accounts")
+                
+                # Get additional metadata from tokens
+                if bank in tokens_data:
+                    token_info = tokens_data[bank]
+                    
+                    # Format dates
+                    created_at = token_info.get('created_at')
+                    if created_at:
+                        try:
+                            created_dt = datetime.fromisoformat(created_at)
+                            created_display = created_dt.strftime('%Y-%m-%d %H:%M')
+                        except:
+                            created_display = created_at
+                    else:
+                        created_display = "Unknown"
+                    
+                    last_sync = token_info.get('last_sync')
+                    if last_sync:
+                        try:
+                            sync_dt = datetime.fromisoformat(last_sync)
+                            sync_display = sync_dt.strftime('%Y-%m-%d %H:%M')
+                        except:
+                            sync_display = last_sync
+                    else:
+                        sync_display = "Never"
+                    
+                    cursor = token_info.get('cursor', '')
+                    cursor_display = cursor[:20] + "..." if cursor and len(cursor) > 20 else cursor or "None"
+                    
+                    # Display metadata in smaller text
+                    st.markdown(f"""
+                    <div style="margin-left: 20px; font-size: 0.8em; color: #666;">
+                        • Created: {created_display}<br>
+                        • Last Sync: {sync_display}<br>
+                        • Cursor: {cursor_display}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                st.write("")  # Add spacing between accounts
     else:
         st.write("No accounts connected. Please link your accounts first.")
 
@@ -234,10 +298,17 @@ with st.expander("📊 Financial Overview", expanded=True):
         )
     
     with col4:
-        avg_transaction = spending / max(transaction_count, 1)
+        # Calculate average transactions per week
+        if not df_filtered.empty and 'date' in df_filtered.columns:
+            date_range_days = (df_filtered['date'].max() - df_filtered['date'].min()).days
+            weeks = max(date_range_days / 7, 1)  # Avoid division by zero
+            avg_transactions_per_week = transaction_count / weeks
+        else:
+            avg_transactions_per_week = 0
+        
         st.metric(
-            "🧾 Avg Transaction", 
-            f"${avg_transaction:.2f}",
+            "📅 Avg Transactions/Week", 
+            f"{avg_transactions_per_week:.1f}",
             delta=f"{transaction_count} total"
         )
 
@@ -302,13 +373,11 @@ with st.expander("💡 Quick Insights", expanded=False):
 with st.expander("🏷️ Transaction Management", expanded=False):
     
     # Search and bulk operations
-    col1, col2, col3 = st.columns([2, 1, 1])
+    col1, col2 = st.columns([2, 1])
     with col1:
         search_term = st.text_input("🔍 Search transactions", placeholder="Search by description, merchant, etc.")
     with col2:
         show_pending = st.checkbox("Show pending only")
-    with col3:
-        sort_by = st.selectbox("Sort by", ["date", "amount", "custom_category", "name"])
     
     # Apply search filter
     if search_term:
@@ -324,15 +393,13 @@ with st.expander("🏷️ Transaction Management", expanded=False):
     if show_pending and 'pending' in df_display.columns:
         df_display = df_display[df_display['pending'] == True]
     
-    # Sort data
-    df_display = df_display.sort_values(sort_by, ascending=False)
-    
     # Display transactions with editing capabilities
     if not df_display.empty:
         # Select columns to display and edit
         display_columns = [
-            'transaction_id', 'date', 'authorized_date', 'name', 'amount', 'custom_category', 
-            'merchant_name', 'bank_name', 'pending'
+            'date', 'authorized_date', 'name', 'amount', 'custom_category',
+            'personal_finance_category', 'personal_finance_category_detailed', 'personal_finance_category_confidence',
+            'merchant_name', 'bank_name', 'pending', 'transaction_id'
         ]
         
         available_columns = [col for col in display_columns if col in df_display.columns]
@@ -348,31 +415,64 @@ with st.expander("🏷️ Transaction Management", expanded=False):
         edited_df = st.data_editor(
             df_for_display,
             column_config={
-                "transaction_id": st.column_config.TextColumn(
-                    "Transaction ID",
-                    disabled=True,
-                    help="Unique transaction identifier"
+                "date": st.column_config.DateColumn(
+                    "Date",
+                    format="MM/DD/YYYY",
+                    disabled=True
                 ),
                 "authorized_date": st.column_config.DateColumn(
                     "Auth Date",
                     format="MM/DD/YYYY",
+                    disabled=True,
                     help="When transaction was authorized"
+                ),
+                "name": st.column_config.TextColumn(
+                    "Name",
+                    disabled=True,
+                    help="Transaction description"
+                ),
+                "amount": st.column_config.NumberColumn(
+                    "Amount",
+                    format="$%.2f",
+                    disabled=True
                 ),
                 "custom_category": st.column_config.SelectboxColumn(
                     "Category",
                     options=list(CATEGORY_MAPPING.keys()),
                     required=True,
                 ),
-                "amount": st.column_config.NumberColumn(
-                    "Amount",
-                    format="$%.2f",
+                "personal_finance_category": st.column_config.TextColumn(
+                    "PFC Primary",
+                    disabled=True,
+                    help="Plaid's primary personal finance category"
                 ),
-                "date": st.column_config.DateColumn(
-                    "Date",
-                    format="MM/DD/YYYY",
+                "personal_finance_category_detailed": st.column_config.TextColumn(
+                    "PFC Detailed",
+                    disabled=True,
+                    help="Plaid's detailed personal finance category"
+                ),
+                "personal_finance_category_confidence": st.column_config.TextColumn(
+                    "PFC Confidence",
+                    disabled=True,
+                    help="Plaid's confidence level for the category"
+                ),
+                "merchant_name": st.column_config.TextColumn(
+                    "Merchant",
+                    help="Merchant name (editable)"
+                ),
+                "bank_name": st.column_config.TextColumn(
+                    "Bank",
+                    disabled=True,
+                    help="Bank name"
                 ),
                 "pending": st.column_config.CheckboxColumn(
-                    "Pending"
+                    "Pending",
+                    disabled=True
+                ),
+                "transaction_id": st.column_config.TextColumn(
+                    "Transaction ID",
+                    disabled=True,
+                    help="Unique transaction identifier"
                 )
             },
             num_rows="dynamic",
@@ -397,18 +497,11 @@ with st.expander("🏷️ Transaction Management", expanded=False):
                             mask = original_df['transaction_id'] == transaction_id
                             
                             if mask.any():
-                                # Update the columns that were edited
-                                for col in available_columns:
-                                    if col in edited_df.columns and col != 'transaction_id':
+                                # Update only the editable columns
+                                editable_columns = ['custom_category', 'merchant_name']
+                                for col in editable_columns:
+                                    if col in edited_df.columns:
                                         value = row[col]
-                                        
-                                        # Convert datetime back to string for storage
-                                        if col in ['date', 'authorized_date'] and pd.notna(value):
-                                            if hasattr(value, 'strftime'):
-                                                value = value.strftime('%Y-%m-%d')
-                                            elif hasattr(value, 'date'):
-                                                value = value.date().isoformat()
-                                        
                                         original_df.loc[mask, col] = value
                 
                 # Save back to CSV
