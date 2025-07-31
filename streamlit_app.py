@@ -108,7 +108,20 @@ with st.expander("🔧 Account Management", expanded=False):
         
         for bank, info in accounts.items():
             if 'accounts' in info:
-                st.write(f"**{bank}**: {len(info['accounts'])} accounts")
+                # Bank header with styling
+                st.markdown(f"### 🏦 {bank} ({len(info['accounts'])} accounts)")
+                
+                # Display individual accounts
+                for acc in info['accounts']:
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.write(f"**{acc['name']}**")
+                        st.caption(f"{acc['type']} - {acc['subtype']}")
+                    with col2:
+                        st.write(f"**Balance:** ${acc['balance']:,.2f}")
+                    with col3:
+                        mask = acc.get('mask', 'N/A')
+                        st.write(f"**Account:** •••• {mask}")
                 
                 # Get additional metadata from tokens
                 if bank in tokens_data:
@@ -138,18 +151,25 @@ with st.expander("🔧 Account Management", expanded=False):
                     cursor = token_info.get('cursor', '')
                     cursor_display = cursor[:20] + "..." if cursor and len(cursor) > 20 else cursor or "None"
                     
-                    # Display metadata in smaller text
-                    st.markdown(f"""
-                    <div style="margin-left: 20px; font-size: 0.8em; color: #666;">
-                        • Created: {created_display}<br>
-                        • Last Sync: {sync_display}<br>
-                        • Cursor: {cursor_display}
-                    </div>
-                    """, unsafe_allow_html=True)
+                    # Display metadata in columns
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.write("**Connected:**")
+                        st.code(created_display)
+                    with col2:
+                        st.write("**Last Sync:**")
+                        st.code(sync_display)
+                    with col3:
+                        st.write("**Cursor:**")
+                        st.code(cursor_display)
                 
-                st.write("")  # Add spacing between accounts
+                # Add separator between banks
+                st.markdown("---")
     else:
         st.write("No accounts connected. Please link your accounts first.")
+        
+        # Add link to Account Linking page
+        st.info("💡 Go to the **🏦 Account Linking** page to connect your bank accounts.")
 
 # Load transaction data
 @st.cache_data
