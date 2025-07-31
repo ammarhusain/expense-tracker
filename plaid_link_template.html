@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Plaid Link - Account Linking</title>
+    <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; text-align: center; background: #f5f5f5; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        button { background: #007bff; color: white; padding: 15px 30px; 
+                 border: none; border-radius: 5px; cursor: pointer; font-size: 18px; margin: 10px; }
+        button:hover { background: #0056b3; }
+        .result { margin: 20px 0; padding: 20px; border-radius: 5px; }
+        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        textarea { width: 100%; height: 120px; margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
+        .debug { background: #fff3cd; color: #856404; padding: 10px; margin: 10px 0; border-radius: 4px; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏦 Connect Your Bank Account</h1>
+        <div class="debug">
+            <strong>Environment:</strong> Production<br>
+            <strong>Token:</strong> {TOKEN_PREVIEW}...
+        </div>
+        
+        <button onclick="linkAccount()">Link Account with Plaid</button>
+        <div id="result"></div>
+    </div>
+    
+    <script>
+        console.log('Plaid Link Token:', '{TOKEN_LOG_PREVIEW}...');
+        
+        function linkAccount() {
+            console.log('Starting Plaid Link...');
+            
+            try {
+                const handler = Plaid.create({
+                    token: '{LINK_TOKEN}',
+                    onSuccess: (public_token, metadata) => {
+                        console.log('Plaid Link Success:', metadata);
+                        
+                        document.getElementById('result').innerHTML = 
+                            '<div class="result success">' +
+                            '<h3>✅ Account Successfully Linked!</h3>' +
+                            '<p><strong>Institution:</strong> ' + metadata.institution.name + '</p>' +
+                            '<p><strong>Accounts Connected:</strong> ' + metadata.accounts.length + '</p>' +
+                            '<p><strong>Copy this information and paste it in Streamlit:</strong></p>' +
+                            '<textarea readonly onclick="this.select()">' +
+                            JSON.stringify({
+                                public_token: public_token,
+                                institution_name: metadata.institution.name
+                            }, null, 2) +
+                            '</textarea>' +
+                            '<p><strong>Next:</strong> Go back to Streamlit and use the "Complete Account Connection" form.</p>' +
+                            '</div>';
+                    },
+                    onExit: (err, metadata) => {
+                        console.log('Plaid Link Exit:', err, metadata);
+                        
+                        if (err != null) {
+                            document.getElementById('result').innerHTML = 
+                                '<div class="result error">' +
+                                '<h3>❌ Account Linking Failed</h3>' +
+                                '<p><strong>Error:</strong> ' + (err.error_message || err.error_code || 'Unknown error') + '</p>' +
+                                '<p><strong>Error Type:</strong> ' + (err.error_type || 'Unknown') + '</p>' +
+                                '<p>Please try again or contact support if the issue persists.</p>' +
+                                '</div>';
+                        } else {
+                            document.getElementById('result').innerHTML = 
+                                '<div class="result" style="background: #fff3cd; color: #856404; border: 1px solid #ffeaa7;">' +
+                                '<h3>Account Linking Cancelled</h3>' +
+                                '<p>You cancelled the account linking process.</p>' +
+                                '</div>';
+                        }
+                    },
+                    onLoad: () => {
+                        console.log('Plaid Link loaded successfully');
+                    },
+                    onEvent: (eventName, metadata) => {
+                        console.log('Plaid Link Event:', eventName, metadata);
+                    }
+                });
+                
+                console.log('Opening Plaid Link...');
+                handler.open();
+                
+            } catch (error) {
+                console.error('Error initializing Plaid Link:', error);
+                document.getElementById('result').innerHTML = 
+                    '<div class="result error">' +
+                    '<h3>❌ Initialization Error</h3>' +
+                    '<p><strong>Error:</strong> ' + error.message + '</p>' +
+                    '<p>Check your browser console for more details.</p>' +
+                    '</div>';
+            }
+        }
+        
+        // Auto-check if Plaid is loaded
+        window.addEventListener('load', function() {
+            if (typeof Plaid === 'undefined') {
+                document.getElementById('result').innerHTML = 
+                    '<div class="result error">' +
+                    '<h3>❌ Plaid Library Failed to Load</h3>' +
+                    '<p>Please check your internet connection and try refreshing the page.</p>' +
+                    '</div>';
+            } else {
+                console.log('Plaid library loaded successfully');
+            }
+        });
+    </script>
+</body>
+</html>
