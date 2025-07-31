@@ -4,6 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import numpy as np
+import time
 from data_manager import DataManager
 from sync_service import TransactionSyncService
 from config import CATEGORY_MAPPING
@@ -71,29 +72,13 @@ with st.sidebar:
         if st.button("🔄 Incremental Sync", type="primary", help="Fetch only new transactions since last sync"):
             with st.spinner("Syncing new transactions..."):
                 result = sync_service.sync_all_accounts(full_sync=False)
-                if result.get('errors'):
-                    st.error(f"Sync errors: {', '.join(result['errors'])}")
-                if result.get('info'):
-                    st.warning(result['info'])
-                if result.get('total_new_transactions', 0) > 0 or result.get('accounts_synced', 0) > 0:
-                    st.success(f"✅ Synced {result.get('total_new_transactions', 0)} new, {result.get('total_modified_transactions', 0)} modified, {result.get('total_removed_transactions', 0)} removed transactions from {result.get('accounts_synced', 0)} accounts")
-                if not result.get('errors') and not result.get('total_new_transactions', 0):
-                    st.info("No new transactions found or rate limited.")
-                st.rerun()
+                st.write(result)
     
     with col2:
         if st.button("🔄 Full Sync", type="secondary", help="Re-fetch all historical transactions"):
             with st.spinner("Performing full sync..."):
                 result = sync_service.sync_all_accounts(full_sync=True)
-                if result.get('errors'):
-                    st.error(f"Sync errors: {', '.join(result['errors'])}")
-                if result.get('info'):
-                    st.warning(result['info'])
-                if result.get('total_new_transactions', 0) > 0 or result.get('accounts_synced', 0) > 0:
-                    st.success(f"✅ Full sync: {result.get('total_new_transactions', 0)} new, {result.get('total_modified_transactions', 0)} modified, {result.get('total_removed_transactions', 0)} removed transactions from {result.get('accounts_synced', 0)} accounts")
-                if not result.get('errors') and not result.get('total_new_transactions', 0):
-                    st.info("No transactions found or rate limited.")
-                st.rerun()
+                st.write(result)
     
     # Connected accounts info
     accounts = sync_service.get_connected_accounts()

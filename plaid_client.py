@@ -9,6 +9,7 @@ from plaid.model.country_code import CountryCode
 from plaid.model.products import Products
 from plaid.configuration import Configuration
 from plaid.api_client import ApiClient
+from plaid import ApiException
 from typing import List, Dict, Optional
 import logging
 import json
@@ -48,7 +49,6 @@ class PlaidClient:
         
     def _log_api_response(self, endpoint: str, response, access_token: str = None):
         """Log raw API response to debug directory"""
-        print(f"Attempting to log response {dict(response) if hasattr(response, 'keys') else type(response)}")
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             # Mask access token for security
@@ -58,20 +58,10 @@ class PlaidClient:
             
             # Convert response to dict safely
             try:
-                if isinstance(response, TransactionsSyncResponse):
-                    # Handle TransactionsSyncResponse specifically
-                    response_data = {
-                        'added': len(response.get('added', [])),
-                        'modified': len(response.get('modified', [])),
-                        'removed': response.get('removed', []),
-                        'next_cursor': response.get('next_cursor', ''),
-                        'has_more': response.get('has_more', False),
-                        'request_id': response.get('request_id', ''),
-                        'transactions_update_status': response.get('transactions_update_status', ''),
-                    }
-                    response_str = json.dumps(response_data, indent=2, default=str)
+                if hasattr(response, 'to_dict'):
+                    response_dict = response.to_dict()
+                    response_str = json.dumps(response_dict, indent=2, default=str)
                 else:
-                    # Fallback for other response types
                     response_str = f"Response type: {type(response)}\nResponse content: {str(response)}"
             except Exception as e:
                 response_str = f"Could not serialize response: {e}"
@@ -95,59 +85,152 @@ class PlaidClient:
         return env_to_host.get(config.plaid_env, 'https://sandbox.plaid.com')
     
     def create_link_token(self, user_id: str) -> str:
-        # Create base request
-        request = LinkTokenCreateRequest(
-            products=[Products('transactions')],
-            client_name="Personal Finance Tracker",
-            country_codes=[CountryCode('US')],
-            language='en',
-            user=LinkTokenCreateRequestUser(client_user_id=user_id)
-        )
-        
-        # Note: redirect_uri only needed for OAuth institutions in production
-        # and must be configured in Plaid dashboard first
-        
-        # Manually add transactions to the request object's internal dictionary
-        # This bypasses the validation but allows us to set the parameter
-        if hasattr(request, '_data_types_map'):
-            # For newer SDK versions
-            request._data_types_map['transactions'] = dict
-        
-        # Set the transactions parameter directly
-        request.__dict__['transactions'] = {'days_requested': 20}
-        
-        response = self.client.link_token_create(request)
-        return response['link_token']
+        try:
+            # Create base request
+            request = LinkTokenCreateRequest(
+                products=[Products('transactions')],
+                client_name="Personal Finance Tracker",
+                country_codes=[CountryCode('US')],
+                language='en',
+                user=LinkTokenCreateRequestUser(client_user_id=user_id)
+            )
+            
+            # Note: redirect_uri only needed for OAuth institutions in production
+            # and must be configured in Plaid dashboard first
+            
+            # Manually add transactions to the request object's internal dictionary
+            # This bypasses the validation but allows us to set the parameter
+            if hasattr(request, '_data_types_map'):
+                # For newer SDK versions
+                request._data_types_map['transactions'] = dict
+            
+            # Set the transactions parameter directly
+            request.__dict__['transactions'] = {'days_requested': 730}
+            
+            response = self.client.link_token_create(request)
+            response_dict = response.to_dict() if hasattr(response, 'to_dict') else response
+            return response_dict['link_token']
+            
+        except ApiException as e:
+            self.logger.error(f"Plaid API error in create_link_token: {e}")
+            raise
     
     def exchange_public_token(self, public_token: str) -> str:
-        request = ItemPublicTokenExchangeRequest(
-            public_token=public_token
-        )
-        
-        response = self.client.item_public_token_exchange(request)
-        return response['access_token']
+        try:
+            request = ItemPublicTokenExchangeRequest(
+                public_token=public_token
+            )
+            
+            response = self.client.item_public_token_exchange(request)
+            response_dict = response.to_dict() if hasattr(response, 'to_dict') else response
+            return response_dict['access_token']
+            
+        except ApiException as e:
+            self.logger.error(f"Plaid API error in exchange_public_token: {e}")
+            raise
     
     def get_accounts(self, access_token: str) -> List[Dict]:
-        request = AccountsGetRequest(access_token=access_token)
-        response = self.client.accounts_get(request)
-        
-        accounts = []
-        for account in response['accounts']:
-            accounts.append({
-                'account_id': account['account_id'],
-                'name': account['name'],
-                'official_name': account.get('official_name'),
-                'type': safe_str(account['type']),
-                'subtype': safe_str(account['subtype']),
-                'mask': account.get('mask'),
-                'balance_current': account['balances']['current'],
-                'balance_available': account['balances'].get('available'),
-                'balance_limit': account['balances'].get('limit'),
-                'currency_code': account['balances'].get('iso_currency_code', 'USD')
-            })
-        
-        return accounts
+        try:
+            request = AccountsGetRequest(access_token=access_token)
+            response = self.client.accounts_get(request)
+            response_dict = response.to_dict() if hasattr(response, 'to_dict') else response
+            
+            accounts = []
+            for account in response_dict.get('accounts', []):
+                accounts.append({
+                    'account_id': account.get('account_id'),
+                    'name': account.get('name'),
+                    'official_name': account.get('official_name'),
+                    'type': safe_str(account.get('type')),
+                    'subtype': safe_str(account.get('subtype')),
+                    'mask': account.get('mask'),
+                    'balance_current': account.get('balances', {}).get('current'),
+                    'balance_available': account.get('balances', {}).get('available'),
+                    'balance_limit': account.get('balances', {}).get('limit'),
+                    'currency_code': account.get('balances', {}).get('iso_currency_code', 'USD')
+                })
+            
+            return accounts
+            
+        except ApiException as e:
+            self.logger.error(f"Plaid API error in get_accounts: {e}")
+            raise
     
+    def _format_transaction(self, transaction) -> Dict:
+        """Format a single transaction object into our standard format"""
+        # Convert transaction to dict if it's an object
+        if hasattr(transaction, 'to_dict'):
+            transaction = transaction.to_dict()
+        
+        # Extract location data if available and combine into single field
+        location_parts = []
+        if transaction.get('location'):
+            location = transaction['location']
+            if location.get('address'):
+                location_parts.append(location.get('address'))
+            if location.get('city'):
+                location_parts.append(location.get('city'))
+            if location.get('region'):
+                location_parts.append(location.get('region'))
+            if location.get('postal_code'):
+                location_parts.append(location.get('postal_code'))
+            if location.get('country'):
+                location_parts.append(location.get('country'))
+            # Add coordinates with lat/lon prefixes
+            if location.get('lat') and location.get('lon'):
+                location_parts.append(f"lat {location.get('lat')} lon {location.get('lon')}")
+            if location.get('store_number'):
+                location_parts.append(f"Store #{location.get('store_number')}")
+        
+        location_string = ', '.join(location_parts) if location_parts else None
+        
+        # Extract and combine payment meta into single field
+        payment_details_parts = []
+        if transaction.get('payment_meta'):
+            pm = transaction['payment_meta']
+            if pm.get('reference_number'):
+                payment_details_parts.append(f"Ref: {pm.get('reference_number')}")
+            if pm.get('payee'):
+                payment_details_parts.append(f"Payee: {pm.get('payee')}")
+            if pm.get('payer'):
+                payment_details_parts.append(f"Payer: {pm.get('payer')}")
+            if pm.get('payment_method'):
+                payment_details_parts.append(f"Method: {pm.get('payment_method')}")
+        
+        payment_details = ', '.join(payment_details_parts) if payment_details_parts else None
+        
+        # Return only the columns defined in data_manager.py
+        return {
+            # Core fields from data_manager
+            'date': safe_date(transaction.get('date')),
+            'name': transaction.get('name'),
+            'merchant_name': transaction.get('merchant_name'),
+            'original_description': transaction.get('original_description'),
+            'amount': transaction.get('amount'),
+            'category': transaction.get('category', [None])[0] if transaction.get('category') else None,
+            'category_detailed': ' > '.join(transaction.get('category', [])) if transaction.get('category') else None,
+            'personal_finance_category': transaction.get('personal_finance_category', {}).get('primary') if transaction.get('personal_finance_category') else None,
+            'personal_finance_category_detailed': transaction.get('personal_finance_category', {}).get('detailed') if transaction.get('personal_finance_category') else None,
+            'personal_finance_category_confidence': transaction.get('personal_finance_category', {}).get('confidence_level') if transaction.get('personal_finance_category') else None,
+            'transaction_type': safe_str(transaction.get('transaction_type')),
+            'currency': transaction.get('iso_currency_code', 'USD'),
+            'pending': transaction.get('pending', False),
+            'account_owner': transaction.get('account_owner'),
+            'location': location_string,
+            'payment_details': payment_details,
+            'website': transaction.get('website'),
+            'custom_category': None,  # For manual overrides
+            'notes': None,  # For user notes
+            'tags': None,   # For user tags
+            # These will be added by sync_service
+            'bank_name': None,  
+            'account_name': None,
+            'created_at': None,  # Added by data_manager
+            'transaction_id': transaction.get('transaction_id'),
+            'account_id': transaction.get('account_id'),
+            'check_number': transaction.get('check_number')
+        }
+
     def transactions_sync(self, access_token: str, cursor: Optional[str] = None) -> Dict:
         """
         Sync transactions using Plaid's sync API with cursor-based pagination
@@ -165,227 +248,55 @@ class PlaidClient:
             - next_cursor: Cursor for next sync
             - has_more: Boolean indicating if more data available
         """
-        print(f"Transaction sync called!!")
-        request_params = {
-            'access_token': access_token
-        }
+        print(f"Transaction sync called - access_token:{access_token}, cursor: {cursor[:20] if cursor else 'None'}")
         
-        if cursor:
-            request_params['cursor'] = cursor
-            
-        request = TransactionsSyncRequest(**request_params)
-        response = self.client.transactions_sync(request)
-        
-        # Log the raw API response for debugging
-        self._log_api_response("transactions_sync", response, access_token)
-        
-        # Format the transactions using consistent formatting logic
-        formatted_transactions = []
-        
-        for transaction in response['added']:
-            # Extract location data if available and combine into single field
-            location_parts = []
-            if hasattr(transaction, 'location') and transaction.location:
-                location = transaction.location
-                if location.get('address'):
-                    location_parts.append(location.get('address'))
-                if location.get('city'):
-                    location_parts.append(location.get('city'))
-                if location.get('region'):
-                    location_parts.append(location.get('region'))
-                if location.get('postal_code'):
-                    location_parts.append(location.get('postal_code'))
-                if location.get('country'):
-                    location_parts.append(location.get('country'))
-                # Add coordinates with lat/lon prefixes
-                if location.get('lat') and location.get('lon'):
-                    location_parts.append(f"lat {location.get('lat')} lon {location.get('lon')}")
-                if location.get('store_number'):
-                    location_parts.append(f"Store #{location.get('store_number')}")
-            
-            location_string = ', '.join(location_parts) if location_parts else None
-            
-            # Extract payment meta if available
-            payment_meta = {}
-            if hasattr(transaction, 'payment_meta') and transaction.payment_meta:
-                payment_meta = {
-                    'reference_number': transaction.payment_meta.get('reference_number'),
-                    'ppd_id': transaction.payment_meta.get('ppd_id'),
-                    'payee': transaction.payment_meta.get('payee'),
-                    'by_order_of': transaction.payment_meta.get('by_order_of'),
-                    'payer': transaction.payment_meta.get('payer'),
-                    'payment_method': transaction.payment_meta.get('payment_method'),
-                    'payment_processor': transaction.payment_meta.get('payment_processor'),
-                    'reason': transaction.payment_meta.get('reason')
-                }
-            
-            formatted_transaction = {
-                # Core transaction data
-                'transaction_id': transaction['transaction_id'],
-                'account_id': transaction['account_id'],
-                'amount': transaction['amount'],  # Positive = money out, Negative = money in
-                'iso_currency_code': transaction.get('iso_currency_code', 'USD'),
-                'unofficial_currency_code': transaction.get('unofficial_currency_code'),
-                
-                # Date information
-                'date': safe_date(transaction['date']),
-                'authorized_date': safe_date(transaction.get('authorized_date')),
-                
-                # Transaction identifiers and descriptions
-                'name': transaction['name'],  # Primary transaction description
-                'original_description': transaction.get('original_description'),  # Raw bank description
-                'merchant_name': transaction.get('merchant_name'),
-                'merchant_entity_id': transaction.get('merchant_entity_id'),
-                
-                # Legacy category fields
-                'category': transaction['category'][0] if transaction.get('category') else None,
-                'category_detailed': ' > '.join(transaction['category']) if transaction.get('category') else None,
-                
-                # Personal finance category fields
-                'personal_finance_category': transaction.get('personal_finance_category', {}).get('primary') if transaction.get('personal_finance_category') else None,
-                'personal_finance_category_detailed': transaction.get('personal_finance_category', {}).get('detailed') if transaction.get('personal_finance_category') else None,
-                'personal_finance_category_confidence': transaction.get('personal_finance_category', {}).get('confidence_level') if transaction.get('personal_finance_category') else None,
-                
-                # Transaction metadata
-                'transaction_type': safe_str(transaction.get('transaction_type')),
-                'transaction_code': safe_str(transaction.get('transaction_code')),
-                'check_number': transaction.get('check_number'),
-                'pending': transaction.get('pending', False),
-                'pending_transaction_id': transaction.get('pending_transaction_id'),
-                'account_owner': transaction.get('account_owner'),
-                
-                # Combined location data
-                'location': location_string,
-                
-                # Payment metadata (flattened for CSV)
-                'payment_reference_number': payment_meta.get('reference_number'),
-                'payment_ppd_id': payment_meta.get('ppd_id'),
-                'payment_payee': payment_meta.get('payee'),
-                'payment_by_order_of': payment_meta.get('by_order_of'),
-                'payment_payer': payment_meta.get('payer'),
-                'payment_method': payment_meta.get('payment_method'),
-                'payment_processor': payment_meta.get('payment_processor'),
-                'payment_reason': payment_meta.get('reason'),
-                
-                # Additional fields that might be useful
-                'website': transaction.get('website'),
-                'logo_url': transaction.get('logo_url'),
-                'subaccount_id': transaction.get('subaccount_id'),
-                
-                # Custom fields for our categorization
-                'custom_category': None,  # For manual overrides
-                'notes': None,  # For user notes
-                'tags': None   # For user tags
+        try:
+            request_params = {
+                'access_token': access_token
             }
             
-            formatted_transactions.append(formatted_transaction)
-        
-        # Handle modified transactions (same format)
-        # For now, we'll include modified transactions in the main transactions array
-        # since the sync_service expects them there
-        
-        for transaction in response['modified']:
-            # Extract location data if available and combine into single field
-            location_parts = []
-            if hasattr(transaction, 'location') and transaction.location:
-                location = transaction.location
-                if location.get('address'):
-                    location_parts.append(location.get('address'))
-                if location.get('city'):
-                    location_parts.append(location.get('city'))
-                if location.get('region'):
-                    location_parts.append(location.get('region'))
-                if location.get('postal_code'):
-                    location_parts.append(location.get('postal_code'))
-                if location.get('country'):
-                    location_parts.append(location.get('country'))
-                # Add coordinates with lat/lon prefixes
-                if location.get('lat') and location.get('lon'):
-                    location_parts.append(f"lat {location.get('lat')} lon {location.get('lon')}")
-                if location.get('store_number'):
-                    location_parts.append(f"Store #{location.get('store_number')}")
+            if cursor:
+                request_params['cursor'] = cursor
+                
+            request = TransactionsSyncRequest(**request_params)
+            response = self.client.transactions_sync(request)
             
-            location_string = ', '.join(location_parts) if location_parts else None
+            # Log the raw API response for debugging
+            self._log_api_response("transactions_sync", response, access_token)
             
-            # Extract payment meta if available
-            payment_meta = {}
-            if hasattr(transaction, 'payment_meta') and transaction.payment_meta:
-                payment_meta = {
-                    'reference_number': transaction.payment_meta.get('reference_number'),
-                    'ppd_id': transaction.payment_meta.get('ppd_id'),
-                    'payee': transaction.payment_meta.get('payee'),
-                    'by_order_of': transaction.payment_meta.get('by_order_of'),
-                    'payer': transaction.payment_meta.get('payer'),
-                    'payment_method': transaction.payment_meta.get('payment_method'),
-                    'payment_processor': transaction.payment_meta.get('payment_processor'),
-                    'reason': transaction.payment_meta.get('reason')
-                }
+            # Convert response to dict for easier access
+            response_dict = response.to_dict() if hasattr(response, 'to_dict') else response
             
-            formatted_transaction = {
-                # Core transaction data
-                'transaction_id': transaction['transaction_id'],
-                'account_id': transaction['account_id'],
-                'amount': transaction['amount'],  # Positive = money out, Negative = money in
-                'iso_currency_code': transaction.get('iso_currency_code', 'USD'),
-                'unofficial_currency_code': transaction.get('unofficial_currency_code'),
-                
-                # Date information
-                'date': safe_date(transaction['date']),
-                'authorized_date': safe_date(transaction.get('authorized_date')),
-                
-                # Transaction identifiers and descriptions
-                'name': transaction['name'],  # Primary transaction description
-                'original_description': transaction.get('original_description'),  # Raw bank description
-                'merchant_name': transaction.get('merchant_name'),
-                'merchant_entity_id': transaction.get('merchant_entity_id'),
-                
-                # Categorization - prefer personal_finance_category over legacy category
-                'category': (transaction.get('personal_finance_category', {}).get('primary') if transaction.get('personal_finance_category') 
-                           else transaction['category'][0] if transaction.get('category') 
-                           else 'Other'),
-                'category_detailed': (transaction.get('personal_finance_category', {}).get('detailed') if transaction.get('personal_finance_category')
-                                    else ' > '.join(transaction['category']) if transaction.get('category')
-                                    else 'Other'),
-                
-                # Transaction metadata
-                'transaction_type': safe_str(transaction.get('transaction_type')),
-                'transaction_code': safe_str(transaction.get('transaction_code')),
-                'check_number': transaction.get('check_number'),
-                'pending': transaction.get('pending', False),
-                'pending_transaction_id': transaction.get('pending_transaction_id'),
-                'account_owner': transaction.get('account_owner'),
-                
-                # Combined location data
-                'location': location_string,
-                
-                # Payment metadata (flattened for CSV)
-                'payment_reference_number': payment_meta.get('reference_number'),
-                'payment_ppd_id': payment_meta.get('ppd_id'),
-                'payment_payee': payment_meta.get('payee'),
-                'payment_by_order_of': payment_meta.get('by_order_of'),
-                'payment_payer': payment_meta.get('payer'),
-                'payment_method': payment_meta.get('payment_method'),
-                'payment_processor': payment_meta.get('payment_processor'),
-                'payment_reason': payment_meta.get('reason'),
-                
-                # Additional fields that might be useful
-                'website': transaction.get('website'),
-                'logo_url': transaction.get('logo_url'),
-                'subaccount_id': transaction.get('subaccount_id'),
-                
-                # Custom fields for our categorization
-                'custom_category': None,  # For manual overrides
-                'notes': None,  # For user notes
-                'tags': None   # For user tags
+            print(f"Response summary: added={len(response_dict.get('added', []))}, modified={len(response_dict.get('modified', []))}, has_more={response_dict.get('has_more', False)}, next_cursor={response_dict.get('next_cursor', '')[:20] if response_dict.get('next_cursor') else 'empty'}")
+            
+            # Format the transactions using consistent formatting logic
+            formatted_transactions = []
+            
+            # Process added transactions
+            for transaction in response_dict.get('added', []):
+                formatted_transaction = self._format_transaction(transaction)
+                formatted_transactions.append(formatted_transaction)
+            
+            # Process modified transactions
+            for transaction in response_dict.get('modified', []):
+                formatted_transaction = self._format_transaction(transaction)
+                formatted_transactions.append(formatted_transaction)
+            
+            result = {
+                'transactions': formatted_transactions,
+                'added': len(response_dict.get('added', [])),
+                'modified': len(response_dict.get('modified', [])),
+                'removed': response_dict.get('removed', []),
+                'next_cursor': response_dict.get('next_cursor', ''),
+                'has_more': response_dict.get('has_more', False)
             }
             
-            formatted_transactions.append(formatted_transaction)
-        
-        return {
-            'transactions': formatted_transactions,
-            'added': len(response['added']),
-            'modified': len(response['modified']),
-            'removed': response['removed'],
-            'next_cursor': response['next_cursor'],
-            'has_more': response['has_more']
-        }
+            print(f"Returning: transactions={len(result['transactions'])}, has_more={result['has_more']}")
+            return result
+            
+        except ApiException as e:
+            self.logger.error(f"Plaid API error in transactions_sync: {e}")
+            raise
+        except Exception as e:
+            self.logger.error(f"Unexpected error in transactions_sync: {e}")
+            raise

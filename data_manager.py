@@ -19,7 +19,7 @@ class DataManager:
                 'date', 'name', 'merchant_name', 'original_description', 
                 'amount','category', 'category_detailed',
                 'personal_finance_category', 'personal_finance_category_detailed', 'personal_finance_category_confidence',
-                'transaction_type', 'currency', 'pending',
+                'transaction_type', 'currency', 'pending', 'account_owner',
                 'location', 'payment_details', 'website',
                 'custom_category', 'notes', 'tags', 'bank_name', 'account_name', 'created_at', 'transaction_id', 'account_id', 'check_number'
             ]

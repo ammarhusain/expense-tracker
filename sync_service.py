@@ -65,14 +65,18 @@ class TransactionSyncService:
             self.logger.error(f"Error loading access tokens: {e}")
             return {}
     
-    def can_sync_institution(self, institution_name: str, tokens: Dict) -> tuple[bool, str]:
-        """Check if we can sync this institution (rate limiting)"""
+    def can_sync_institution(self, institution_name: str, tokens: Dict) -> tuple[bool, str, int]:
+        """Check if we can sync this institution (rate limiting)
+        
+        Returns:
+            tuple: (can_sync, reason, retry_in_seconds)
+        """
         if institution_name not in tokens:
-            return False, "Institution not found"
+            return False, "Institution not found", 0
         
         last_sync = tokens[institution_name].get('last_sync')
         if not last_sync:
-            return True, "Never synced before"
+            return True, "Never synced before", 0
         
         last_sync_time = datetime.fromisoformat(last_sync)
         time_since_sync = datetime.now() - last_sync_time
@@ -80,10 +84,11 @@ class TransactionSyncService:
         # Rate limiting: Allow sync only if more than 5 minutes have passed
         if time_since_sync < timedelta(minutes=5):
             remaining = timedelta(minutes=5) - time_since_sync
-            remaining_minutes = int(remaining.total_seconds() / 60)
-            return False, f"Rate limited. Try again in {remaining_minutes + 1} minutes."
+            remaining_seconds = int(remaining.total_seconds())
+            remaining_minutes = int(remaining_seconds / 60)
+            return False, f"Rate limited. Try again in {remaining_minutes + 1} minutes.", remaining_seconds
         
-        return True, "OK to sync"
+        return True, "OK to sync", 0
     
     def update_last_sync_time(self, institution_name: str, cursor: Optional[str] = None):
         """Update the last sync time and cursor for an institution"""
@@ -108,16 +113,27 @@ class TransactionSyncService:
             "accounts_synced": 0,
             "errors": [],
             "account_details": {},
-            "rate_limited": []
+            "rate_limited": [],
+            "has_rate_limited": False,
+            "min_retry_seconds": None  # Minimum seconds to wait before retrying
         }
         
         self.logger.info("Starting transaction sync using cursor-based pagination")
         
+        print(f"Started sync for {len(tokens.items())} accounts")
         for institution_name, token_data in tokens.items():
             # Check rate limiting
-            can_sync, reason = self.can_sync_institution(institution_name, tokens)
+            can_sync, reason, retry_seconds = self.can_sync_institution(institution_name, tokens)
             if not can_sync:
+                print(f"can_sync {can_sync}, reason {reason}, retry in {retry_seconds}s")
                 results["rate_limited"].append(f"{institution_name}: {reason}")
+                results["has_rate_limited"] = True
+                
+                # Track the minimum retry time for the frontend
+                if retry_seconds > 0:
+                    if results["min_retry_seconds"] is None or retry_seconds < results["min_retry_seconds"]:
+                        results["min_retry_seconds"] = retry_seconds
+                
                 continue
                 
             try:
