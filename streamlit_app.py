@@ -58,12 +58,9 @@ st.markdown("""
 # Header
 st.markdown('<h1 class="main-header">💰 Personal Finance Tracker</h1>', unsafe_allow_html=True)
 
-# Sidebar for controls
-with st.sidebar:
-    st.header("🔧 Controls")
-    
-    # Account Management
-    st.subheader("Account Management")
+# Account Management Section
+with st.expander("🔧 Account Management", expanded=False):
+    st.subheader("Sync Options")
     
     # Sync options
     col1, col2 = st.columns(2)
@@ -81,12 +78,14 @@ with st.sidebar:
                 st.write(result)
     
     # Connected accounts info
+    st.subheader("Connected Accounts")
     accounts = sync_service.get_connected_accounts()
     if accounts and not accounts.get('message'):
-        st.subheader("Connected Accounts")
         for bank, info in accounts.items():
             if 'accounts' in info:
                 st.write(f"**{bank}**: {len(info['accounts'])} accounts")
+    else:
+        st.write("No accounts connected. Please link your accounts first.")
 
 # Load transaction data
 @st.cache_data
@@ -159,9 +158,50 @@ with st.sidebar:
             (df_filtered['amount'] >= min_amount) & 
             (df_filtered['amount'] <= max_amount)
         ]
+    
+    # Export functionality
+    st.subheader("📥 Export Data")
+    
+    # Column selection for export
+    available_export_columns = [
+        'date', 'name', 'amount', 'custom_category', 'merchant_name', 
+        'bank_name', 'category', 'original_description', 'pending',
+        'transaction_id', 'account_name'
+    ]
+    
+    export_columns = st.multiselect(
+        "Export Columns",
+        options=[col for col in available_export_columns if col in df_filtered.columns],
+        default=[col for col in ['date', 'name', 'amount', 'custom_category', 'merchant_name', 'bank_name'] if col in df_filtered.columns],
+        help="Select which columns to include in the export"
+    )
+    
+    # Export button
+    if export_columns and not df_filtered.empty:
+        export_df = df_filtered[export_columns].copy()
+        
+        # Convert datetime columns to strings for CSV export
+        for col in export_df.columns:
+            if export_df[col].dtype == 'datetime64[ns]' or col in ['date', 'authorized_date']:
+                export_df[col] = pd.to_datetime(export_df[col]).dt.strftime('%Y-%m-%d')
+        
+        csv_data = export_df.to_csv(index=False)
+        
+        st.download_button(
+            label=f"📥 Export CSV ({len(export_df)} transactions)",
+            data=csv_data,
+            file_name=f"filtered_transactions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            type="primary",
+            help="Download filtered transactions as CSV file"
+        )
+    elif not export_columns:
+        st.info("Select columns to export")
+    else:
+        st.info("No transactions to export with current filters")
 
-# Main dashboard
-if not df_filtered.empty:
+# Key metrics and analysis sections collapsed by default
+with st.expander("📊 Financial Overview", expanded=True):
     # Key metrics row
     col1, col2, col3, col4 = st.columns(4)
     
@@ -200,10 +240,8 @@ if not df_filtered.empty:
             f"${avg_transaction:.2f}",
             delta=f"{transaction_count} total"
         )
-    
-    # Charts row
-    st.markdown('<h2 class="section-header">📈 Spending Analysis</h2>', unsafe_allow_html=True)
-    
+
+with st.expander("📈 Spending Analysis", expanded=False):
     col1, col2 = st.columns(2)
     
     with col1:
@@ -237,9 +275,31 @@ if not df_filtered.empty:
             fig_line.update_xaxes(title="Month")
             fig_line.update_yaxes(title="Amount ($)")
             st.plotly_chart(fig_line, use_container_width=True)
-    
-    # Transaction management section
-    st.markdown('<h2 class="section-header">🏷️ Transaction Management</h2>', unsafe_allow_html=True)
+
+with st.expander("💡 Quick Insights", expanded=False):
+    if not df_filtered.empty and 'amount' in df_filtered.columns:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Top spending categories
+            if 'custom_category' in df_filtered.columns:
+                spending_by_cat = df_filtered[df_filtered['amount'] > 0].groupby('custom_category')['amount'].sum().sort_values(ascending=False).head(5)
+                st.write("**Top 5 Spending Categories:**")
+                for cat, amount in spending_by_cat.items():
+                    st.write(f"• {cat}: ${amount:,.2f}")
+        
+        with col2:
+            # Top merchants
+            if 'merchant_name' in df_filtered.columns:
+                top_merchants = df_filtered[df_filtered['amount'] > 0].groupby('merchant_name')['amount'].sum().sort_values(ascending=False).head(5)
+                st.write("**Top 5 Merchants:**")
+                for merchant, amount in top_merchants.items():
+                    if pd.notna(merchant):
+                        st.write(f"• {merchant}: ${amount:,.2f}")
+    else:
+        st.info("No transaction data available for insights.")
+
+with st.expander("🏷️ Transaction Management", expanded=False):
     
     # Search and bulk operations
     col1, col2, col3 = st.columns([2, 1, 1])
@@ -362,5 +422,6 @@ if not df_filtered.empty:
     else:
         st.info("No transactions match your current filters.")
 
-else:
+# Main dashboard check for data availability
+if df_filtered.empty:
     st.warning("No transactions found with current filters.")
