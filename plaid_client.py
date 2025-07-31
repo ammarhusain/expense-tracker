@@ -1,5 +1,6 @@
 from plaid.api import plaid_api
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
+from plaid.model.transactions_sync_response import TransactionsSyncResponse
 from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
@@ -10,6 +11,9 @@ from plaid.configuration import Configuration
 from plaid.api_client import ApiClient
 from typing import List, Dict, Optional
 import logging
+import json
+import os
+from datetime import datetime
 from config import config
 
 def safe_str(value):
@@ -28,6 +32,10 @@ class PlaidClient:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         
+        # Create debug directory if it doesn't exist
+        self.debug_dir = os.path.join(os.getcwd(), 'debug')
+        os.makedirs(self.debug_dir, exist_ok=True)
+        
         configuration = Configuration(
             host=self._get_plaid_host(),
             api_key={
@@ -38,6 +46,46 @@ class PlaidClient:
         api_client = ApiClient(configuration)
         self.client = plaid_api.PlaidApi(api_client)
         
+    def _log_api_response(self, endpoint: str, response, access_token: str = None):
+        """Log raw API response to debug directory"""
+        print(f"Attempting to log response {dict(response) if hasattr(response, 'keys') else type(response)}")
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Mask access token for security
+            token_suffix = access_token[-4:] if access_token else "unknown"
+            filename = f"{endpoint}_{timestamp}_{token_suffix}.json"
+            filepath = os.path.join(self.debug_dir, filename)
+            
+            # Convert response to dict safely
+            try:
+                if isinstance(response, TransactionsSyncResponse):
+                    # Handle TransactionsSyncResponse specifically
+                    response_data = {
+                        'added': len(response.get('added', [])),
+                        'modified': len(response.get('modified', [])),
+                        'removed': response.get('removed', []),
+                        'next_cursor': response.get('next_cursor', ''),
+                        'has_more': response.get('has_more', False),
+                        'request_id': response.get('request_id', ''),
+                        'transactions_update_status': response.get('transactions_update_status', ''),
+                    }
+                    response_str = json.dumps(response_data, indent=2, default=str)
+                else:
+                    # Fallback for other response types
+                    response_str = f"Response type: {type(response)}\nResponse content: {str(response)}"
+            except Exception as e:
+                response_str = f"Could not serialize response: {e}"
+            
+            with open(filepath, 'w') as f:
+                f.write(response_str)
+            
+            self.logger.info(f"API response logged to: {filepath}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to log API response: {e}")
+            # Don't let logging errors break the actual sync
+            pass
+
     def _get_plaid_host(self):
         env_to_host = {
             'sandbox': 'https://sandbox.plaid.com',
@@ -117,6 +165,7 @@ class PlaidClient:
             - next_cursor: Cursor for next sync
             - has_more: Boolean indicating if more data available
         """
+        print(f"Transaction sync called!!")
         request_params = {
             'access_token': access_token
         }
@@ -126,6 +175,9 @@ class PlaidClient:
             
         request = TransactionsSyncRequest(**request_params)
         response = self.client.transactions_sync(request)
+        
+        # Log the raw API response for debugging
+        self._log_api_response("transactions_sync", response, access_token)
         
         # Format the transactions using consistent formatting logic
         formatted_transactions = []

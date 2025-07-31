@@ -46,6 +46,7 @@ class DataManager:
     
     def categorize_transaction(self, transaction: Dict) -> str:
         """Apply custom categorization rules"""
+        return "foobar"
         description = ((transaction.get('name') or '') + ' ' + 
                       (transaction.get('original_description') or '') + ' ' +
                       (transaction.get('merchant_name') or '')).lower()

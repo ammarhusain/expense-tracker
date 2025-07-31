@@ -147,7 +147,6 @@ class TransactionSyncService:
                         access_token=access_token,
                         cursor=cursor
                     )
-                    
                     transactions = response['transactions']
                     
                     # Add bank identifier and account name to transactions
@@ -232,7 +231,6 @@ class TransactionSyncService:
                     access_token=access_token,
                     cursor=cursor
                 )
-                
                 transactions = response['transactions']
                 
                 # Add bank identifier and account name
