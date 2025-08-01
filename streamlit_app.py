@@ -8,6 +8,10 @@ import time
 from data_manager import DataManager
 from sync_service import TransactionSyncService
 from config import CATEGORY_MAPPING
+# Import the LLM categorizer
+import sys
+sys.path.append('llm_service')
+from llm_categorizer import TransactionLLMCategorizer
 
 # Page config
 st.set_page_config(
@@ -524,6 +528,44 @@ with st.expander("🏷️ Transaction Management", expanded=False):
     
     if show_pending and 'pending' in df_display.columns:
         df_display = df_display[df_display['pending'] == True]
+    
+    # AI Categorization section
+    st.subheader("🤖 AI Transaction Categorization")
+    
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        transaction_id_input = st.text_input(
+            "Transaction ID", 
+            placeholder="Paste transaction ID here...",
+            help="Copy a transaction ID from the table below to categorize with AI"
+        )
+    with col2:
+        st.write("")  # Add spacing
+        ask_ai_button = st.button("🤖 Ask AI", type="primary", disabled=not transaction_id_input)
+    
+    # Handle AI categorization
+    if ask_ai_button and transaction_id_input:
+        try:            
+            with st.spinner("🤖 Analyzing transaction with Claude..."):
+                try:
+                    categorizer = TransactionLLMCategorizer()
+                    
+                    # Use asyncio to run the async method
+                    import asyncio
+                    result = asyncio.run(categorizer.categorize_transaction(transaction_id_input.strip()))
+                    
+                    if "error" in result:
+                        st.error(f"❌ Error: {result['error']}")
+                    else:
+                        # Display raw result
+                        st.write("**AI Result:**")
+                        st.json(result)
+                    
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+        
+        except ImportError as e:
+            st.error(f"❌ Import error: {str(e)}")
     
     # Display transactions with editing capabilities
     if not df_display.empty:
