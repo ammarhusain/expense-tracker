@@ -1,6 +1,6 @@
 import pandas as pd
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import logging
 from config import config, CATEGORY_MAPPING
@@ -21,7 +21,7 @@ class DataManager:
                 'personal_finance_category', 'personal_finance_category_detailed', 'personal_finance_category_confidence',
                 'transaction_type', 'currency', 'pending', 'account_owner',
                 'location', 'payment_details', 'website',
-                'custom_category', 'notes', 'tags', 'bank_name', 'account_name', 'created_at', 'transaction_id', 'account_id', 'check_number'
+                'ai_category', 'ai_reason', 'ai_confidence', 'notes', 'tags', 'bank_name', 'account_name', 'created_at', 'transaction_id', 'account_id', 'check_number'
             ]
             
             df = pd.DataFrame(columns=columns)
@@ -44,20 +44,6 @@ class DataManager:
             return set(df['transaction_id'].dropna().astype(str))
         return set()
     
-    def categorize_transaction(self, transaction: Dict) -> str:
-        """Apply custom categorization rules"""
-        return "foobar"
-        description = ((transaction.get('name') or '') + ' ' + 
-                      (transaction.get('original_description') or '') + ' ' +
-                      (transaction.get('merchant_name') or '')).lower()
-        
-        for category, keywords in CATEGORY_MAPPING.items():
-            for keyword in keywords:
-                if keyword in description:
-                    return category
-        
-        # Use Plaid's category if no custom match
-        return transaction.get('category', 'Other')
     
     def find_matching_pending_transaction(self, new_transaction: Dict, existing_df: pd.DataFrame) -> bool:
         """Check if this confirmed transaction matches an existing pending one"""
@@ -140,8 +126,10 @@ class DataManager:
                         confirmed_replacing_pending += 1
                         self.logger.info(f"Confirmed transaction found for pending: {transaction.get('name', 'Unknown')} ${transaction.get('amount', 0)}")
                 
-                # Add custom categorization
-                transaction['custom_category'] = self.categorize_transaction(transaction)
+                # Initialize AI categorization fields (will be populated by LLM service)
+                transaction['ai_category'] = ''
+                transaction['ai_reason'] = ''
+                transaction['ai_confidence'] = ''
                 
                 # Add timestamp for when we imported this
                 transaction['created_at'] = datetime.now().isoformat()
@@ -224,7 +212,7 @@ class DataManager:
             "accounts": df['account_id'].nunique() if 'account_id' in df.columns else 0,
             "total_spending": abs(df[df['amount'] > 0]['amount'].sum()) if 'amount' in df.columns else 0,
             "total_income": abs(df[df['amount'] < 0]['amount'].sum()) if 'amount' in df.columns else 0,
-            "categories": df['custom_category'].value_counts().to_dict() if 'custom_category' in df.columns else {}
+            "categories": df['ai_category'].value_counts().to_dict() if 'ai_category' in df.columns else {}
         }
         
         return summary

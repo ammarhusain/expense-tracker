@@ -21,6 +21,11 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Clear any problematic session state on startup
+if 'initialized' not in st.session_state:
+    st.session_state.clear()
+    st.session_state.initialized = True
+
 # Initialize services
 def get_services():
     return DataManager(), TransactionSyncService()
@@ -80,7 +85,8 @@ with st.expander("🔧 Account Management", expanded=False):
         "Select Account to Sync",
         options=account_options,
         index=0,
-        help="Choose which account to sync, or 'All Accounts' to sync everything"
+        help="Choose which account to sync, or 'All Accounts' to sync everything",
+        key="account_selector"
     )
     
     # Sync options
@@ -328,13 +334,13 @@ with st.sidebar:
         df_filtered = df
     
     # Category filter
-    if 'custom_category' in df_filtered.columns:
+    if 'ai_category' in df_filtered.columns:
         categories = st.multiselect(
             "Categories",
-            options=sorted(df_filtered['custom_category'].dropna().unique()),
-            default=sorted(df_filtered['custom_category'].dropna().unique())
+            options=sorted(df_filtered['personal_finance_category_detailed'].dropna().unique()),
+            default=sorted(df_filtered['personal_finance_category_detailed'].dropna().unique())
         )
-        df_filtered = df_filtered[df_filtered['custom_category'].isin(categories)]
+        df_filtered = df_filtered[df_filtered['personal_finance_category_detailed'].isin(categories)]
     
     # Account filter
     if 'bank_name' in df_filtered.columns:
@@ -364,7 +370,7 @@ with st.sidebar:
     
     # Column selection for export
     available_export_columns = [
-        'date', 'name', 'amount', 'custom_category', 'merchant_name', 
+        'date', 'name', 'amount', 'ai_category', 'ai_reason', 'ai_confidence', 'merchant_name', 
         'bank_name', 'category', 'original_description', 'pending',
         'transaction_id', 'account_name'
     ]
@@ -372,7 +378,7 @@ with st.sidebar:
     export_columns = st.multiselect(
         "Export Columns",
         options=[col for col in available_export_columns if col in df_filtered.columns],
-        default=[col for col in ['date', 'name', 'amount', 'custom_category', 'merchant_name', 'bank_name'] if col in df_filtered.columns],
+        default=[col for col in ['date', 'name', 'amount', 'ai_category', 'ai_reason', 'ai_confidence', 'merchant_name', 'bank_name'] if col in df_filtered.columns],
         help="Select which columns to include in the export"
     )
     
@@ -453,13 +459,13 @@ with st.expander("📈 Spending Analysis", expanded=False):
     
     with col1:
         # Spending by category pie chart
-        if 'custom_category' in df_filtered.columns:
-            spending_by_category = df_filtered[df_filtered['amount'] > 0].groupby('custom_category')['amount'].sum().reset_index()
+        if 'ai_category' in df_filtered.columns:
+            spending_by_category = df_filtered[df_filtered['amount'] > 0].groupby('ai_category')['amount'].sum().reset_index()
             
             fig_pie = px.pie(
                 spending_by_category, 
                 values='amount', 
-                names='custom_category',
+                names='ai_category',
                 title="Spending by Category",
                 color_discrete_sequence=px.colors.qualitative.Set3
             )
@@ -489,8 +495,8 @@ with st.expander("💡 Quick Insights", expanded=False):
         
         with col1:
             # Top spending categories
-            if 'custom_category' in df_filtered.columns:
-                spending_by_cat = df_filtered[df_filtered['amount'] > 0].groupby('custom_category')['amount'].sum().sort_values(ascending=False).head(5)
+            if 'ai_category' in df_filtered.columns:
+                spending_by_cat = df_filtered[df_filtered['amount'] > 0].groupby('ai_category')['amount'].sum().sort_values(ascending=False).head(5)
                 st.write("**Top 5 Spending Categories:**")
                 for cat, amount in spending_by_cat.items():
                     st.write(f"• {cat}: ${amount:,.2f}")
@@ -520,7 +526,7 @@ with st.expander("🏷️ Transaction Management", expanded=False):
         mask = (
             df_filtered['name'].str.contains(search_term, case=False, na=False) |
             df_filtered['merchant_name'].str.contains(search_term, case=False, na=False) |
-            df_filtered['custom_category'].str.contains(search_term, case=False, na=False)
+            df_filtered['ai_category'].str.contains(search_term, case=False, na=False)
         )
         df_display = df_filtered[mask]
     else:
@@ -550,9 +556,8 @@ with st.expander("🏷️ Transaction Management", expanded=False):
                 try:
                     categorizer = TransactionLLMCategorizer()
                     
-                    # Use asyncio to run the async method
-                    import asyncio
-                    result = asyncio.run(categorizer.categorize_transaction(transaction_id_input.strip()))
+                    # Use the synchronous method directly
+                    result = categorizer.categorize_transaction(transaction_id_input.strip())
                     
                     if "error" in result:
                         st.error(f"❌ Error: {result['error']}")
@@ -571,7 +576,7 @@ with st.expander("🏷️ Transaction Management", expanded=False):
     if not df_display.empty:
         # Select columns to display and edit
         display_columns = [
-            'date', 'authorized_date', 'name', 'amount', 'custom_category',
+            'date', 'authorized_date', 'name', 'amount', 'ai_category', 'ai_reason', 'ai_confidence',
             'personal_finance_category', 'personal_finance_category_detailed', 'personal_finance_category_confidence',
             'merchant_name', 'bank_name', 'pending', 'transaction_id'
         ]
@@ -610,10 +615,20 @@ with st.expander("🏷️ Transaction Management", expanded=False):
                     format="$%.2f",
                     disabled=True
                 ),
-                "custom_category": st.column_config.SelectboxColumn(
+                "ai_category": st.column_config.SelectboxColumn(
                     "Category",
                     options=list(CATEGORY_MAPPING.keys()),
                     required=True,
+                ),
+                "ai_reason": st.column_config.TextColumn(
+                    "AI Reason",
+                    disabled=True,
+                    help="AI reasoning for categorization"
+                ),
+                "ai_confidence": st.column_config.TextColumn(
+                    "AI Confidence",
+                    disabled=True,
+                    help="AI confidence level"
                 ),
                 "personal_finance_category": st.column_config.TextColumn(
                     "PFC Primary",
@@ -651,6 +666,7 @@ with st.expander("🏷️ Transaction Management", expanded=False):
             },
             num_rows="dynamic",
             use_container_width=True,
+            hide_index=True,
             key="transaction_editor"
         )
         
@@ -672,7 +688,7 @@ with st.expander("🏷️ Transaction Management", expanded=False):
                             
                             if mask.any():
                                 # Update only the editable columns
-                                editable_columns = ['custom_category', 'merchant_name']
+                                editable_columns = ['ai_category', 'merchant_name']
                                 for col in editable_columns:
                                     if col in edited_df.columns:
                                         value = row[col]

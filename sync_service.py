@@ -7,6 +7,7 @@ import time
 from plaid_client import PlaidClient
 from data_manager import DataManager
 from config import config
+from llm_service.llm_categorizer import TransactionLLMCategorizer
 
 def make_json_serializable(obj):
     """Recursively convert objects to JSON-serializable format"""
@@ -27,6 +28,7 @@ class TransactionSyncService:
     def __init__(self):
         self.plaid_client = PlaidClient()
         self.data_manager = DataManager()
+        self.llm_categorizer = TransactionLLMCategorizer()
         self.logger = logging.getLogger(__name__)
         self.access_tokens_file = "data/access_tokens.json"
     
@@ -64,6 +66,36 @@ class TransactionSyncService:
         except Exception as e:
             self.logger.error(f"Error loading access tokens: {e}")
             return {}
+    
+    def apply_llm_categorization(self, transaction_ids: List[str]) -> int:
+        """Apply LLM categorization to a batch of transactions"""
+        categorized_count = 0
+        
+        for transaction_id in transaction_ids:
+            try:
+                # Get LLM categorization
+                result = self.llm_categorizer.categorize_transaction(transaction_id)
+                
+                if 'error' not in result:
+                    # Update the transaction in CSV with LLM results
+                    df = self.data_manager.read_transactions()
+                    mask = df['transaction_id'] == transaction_id
+                    
+                    if mask.any():
+                        df.loc[mask, 'ai_category'] = result.get('category', '')
+                        df.loc[mask, 'ai_reason'] = result.get('reasoning', '')
+                        df.loc[mask, 'ai_confidence'] = result.get('confidence', '')
+                        
+                        # Save back to CSV
+                        df.to_csv(self.data_manager.csv_path, index=False)
+                        categorized_count += 1
+                        
+                        self.logger.info(f"LLM categorized transaction {transaction_id}: {result.get('category')}")
+                    
+            except Exception as e:
+                self.logger.error(f"Error categorizing transaction {transaction_id}: {str(e)}")
+        
+        return categorized_count
     
     def can_sync_institution(self, institution_name: str, tokens: Dict) -> tuple[bool, str, int]:
         """Check if we can sync this institution (rate limiting)
@@ -192,6 +224,21 @@ class TransactionSyncService:
                 # Save new/modified transactions to CSV
                 new_count = self.data_manager.add_transactions(all_transactions)
                 
+                print(f"NEW COUNT {new_count}")
+
+
+                # Apply LLM categorization to new transactions
+                if new_count > 0 and all_transactions:
+                    try:
+                        # Get transaction IDs for LLM categorization
+                        new_transaction_ids = [t.get('transaction_id') for t in all_transactions if t.get('transaction_id')]
+                        
+                        if new_transaction_ids:
+                            categorized_count = self.apply_llm_categorization(new_transaction_ids)
+                            self.logger.info(f"LLM categorized {categorized_count} transactions for {institution_name}")
+                    except Exception as e:
+                        self.logger.error(f"Error applying LLM categorization for {institution_name}: {str(e)}")
+                
                 # Update last sync time and cursor
                 self.update_last_sync_time(institution_name, cursor)
                 
@@ -275,6 +322,18 @@ class TransactionSyncService:
             
             # Save to CSV
             new_count = self.data_manager.add_transactions(all_transactions)
+            
+            # Apply LLM categorization to new transactions
+            if new_count > 0 and all_transactions:
+                try:
+                    # Get transaction IDs for LLM categorization
+                    new_transaction_ids = [t.get('transaction_id') for t in all_transactions if t.get('transaction_id')]
+                    
+                    if new_transaction_ids:
+                        categorized_count = self.apply_llm_categorization(new_transaction_ids)
+                        self.logger.info(f"LLM categorized {categorized_count} transactions for {institution_name}")
+                except Exception as e:
+                    self.logger.error(f"Error applying LLM categorization for {institution_name}: {str(e)}")
             
             # Update cursor
             self.update_last_sync_time(institution_name, cursor)

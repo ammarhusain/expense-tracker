@@ -142,7 +142,7 @@ class TransactionLLMCategorizer:
             self.logger.error(f"Response was: {response_text}")
             raise e
     
-    async def categorize_transaction(self, transaction_id: str) -> Dict:
+    def categorize_transaction(self, transaction_id: str) -> Dict:
         """Main method to categorize a transaction using Claude API"""
         # Get transaction data
         transaction = self.get_transaction_by_id(transaction_id)
@@ -180,7 +180,7 @@ class TransactionLLMCategorizer:
                 return False
             
             # Update category
-            df.loc[mask, 'custom_category'] = category
+            df.loc[mask, 'ai_category'] = category
             
             # Add reasoning to notes if provided
             if reasoning:
