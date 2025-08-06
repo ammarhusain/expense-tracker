@@ -89,9 +89,6 @@ class TransactionLLMCategorizer:
         
         plaid_category_str = '; '.join(plaid_categories) if plaid_categories else "None"
         
-        # Format available categories
-        category_options = ', '.join(CATEGORY_MAPPING.keys())
-        
         # Fill in the prompt template
         return self.prompt_template.format(
             date=date,
@@ -102,8 +99,7 @@ class TransactionLLMCategorizer:
             bank_name=bank_name,
             location=location,
             payment_details=payment_details,
-            plaid_categories=plaid_category_str,
-            category_options=category_options
+            plaid_categories=plaid_category_str
         )
     
     def _parse_llm_response(self, response_text: str) -> Dict:
@@ -124,13 +120,14 @@ class TransactionLLMCategorizer:
                 if 'category' not in result or 'reasoning' not in result:
                     raise ValueError("Missing required fields in LLM response")
                 
-                # Validate category is in our mapping - must match exactly
-                if result['category'] not in CATEGORY_MAPPING:
-                    raise ValueError(f"LLM returned invalid category: '{result['category']}'. Must be one of: {list(CATEGORY_MAPPING.keys())}")
+                # Create list of all valid categories (values from CATEGORY_MAPPING)
+                valid_categories = []
+                for category_list in CATEGORY_MAPPING.values():
+                    valid_categories.extend(category_list)
                 
-                # Set default confidence if not provided
-                if 'confidence' not in result:
-                    result['confidence'] = 'medium'
+                # Validate category is in our mapping - must match exactly
+                if result['category'] not in valid_categories:
+                    raise ValueError(f"LLM returned invalid category: '{result['category']}'. Must be one of: {valid_categories}")
                 
                 return result
                 
@@ -151,8 +148,7 @@ class TransactionLLMCategorizer:
         
         # Format context for LLM
         prompt = self._format_transaction_context(transaction)
-        print(f"prompt {prompt}")
-        print("************")
+
         # Call Claude API
         message = self.client.messages.create(
             model=self.model,

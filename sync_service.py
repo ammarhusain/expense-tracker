@@ -84,7 +84,6 @@ class TransactionSyncService:
                     if mask.any():
                         df.loc[mask, 'ai_category'] = result.get('category', '')
                         df.loc[mask, 'ai_reason'] = result.get('reasoning', '')
-                        df.loc[mask, 'ai_confidence'] = result.get('confidence', '')
                         
                         # Save back to CSV
                         df.to_csv(self.data_manager.csv_path, index=False)

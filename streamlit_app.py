@@ -357,7 +357,7 @@ with st.sidebar:
     
     # Column selection for export
     available_export_columns = [
-        'date', 'name', 'amount', 'ai_category', 'ai_reason', 'ai_confidence', 'merchant_name', 
+        'date', 'name', 'amount', 'ai_category', 'ai_reason', 'merchant_name', 
         'bank_name', 'category', 'original_description', 'pending',
         'transaction_id', 'account_name'
     ]
@@ -365,7 +365,7 @@ with st.sidebar:
     export_columns = st.multiselect(
         "Export Columns",
         options=[col for col in available_export_columns if col in df_filtered.columns],
-        default=[col for col in ['date', 'name', 'amount', 'ai_category', 'ai_reason', 'ai_confidence', 'merchant_name', 'bank_name'] if col in df_filtered.columns],
+        default=[col for col in ['date', 'name', 'amount', 'ai_category', 'ai_reason', 'merchant_name', 'bank_name'] if col in df_filtered.columns],
         help="Select which columns to include in the export"
     )
     
@@ -499,36 +499,230 @@ with st.expander("💡 Quick Insights", expanded=False):
     else:
         st.info("No transaction data available for insights.")
 
-with st.expander("🏷️ Transaction Management", expanded=False):
+with st.expander("🏷️ Transaction Management", expanded=True):
     
-    # Search and bulk operations
+    df_display = df_filtered
+    
+    # Checkbox to enable editing mode
+    enable_editing = st.checkbox("Make Edits", value=False, help="Check this box to enable editing of AI category, notes, and tags")
+     
+    # Display transactions with editing capabilities
+    if not df_display.empty:
+        if enable_editing:
+            # Select columns for editing mode
+            display_columns = [
+                'date', 'name', 'merchant_name', 'amount', 'ai_category', 'notes', 'tags',
+                'bank_name', 'transaction_id'
+            ]
+            
+            available_columns = [col for col in display_columns if col in df_display.columns]
+            
+            # Create a copy for display and editing
+            df_for_editing = df_display[available_columns].reset_index(drop=True).copy()
+            
+            # Ensure text columns are properly typed as strings to avoid float type errors
+            text_columns = ['ai_category', 'notes', 'tags']
+            for col in text_columns:
+                if col in df_for_editing.columns:
+                    df_for_editing[col] = df_for_editing[col].fillna('').astype(str)
+            
+            # Get all valid categories from CATEGORY_MAPPING
+            valid_categories = []
+            for category_list in CATEGORY_MAPPING.values():
+                valid_categories.extend(category_list)
+            
+            # Also include any existing values from the current dataframe to preserve them
+            existing_ai_categories = df_for_editing['ai_category'].dropna().unique().tolist() if 'ai_category' in df_for_editing.columns else []
+            
+            # Combine valid categories with existing ones (remove duplicates)
+            all_category_options = list(set(valid_categories + existing_ai_categories))
+            all_category_options = [cat for cat in all_category_options if cat and str(cat) != 'nan' and str(cat).strip() != '']
+            
+            # Display editable dataframe
+            edited_df = st.data_editor(
+                df_for_editing,
+                column_config={
+                    "date": st.column_config.DateColumn(
+                        "Date",
+                        format="MM/DD/YYYY",
+                        disabled=True
+                    ),
+                    "name": st.column_config.TextColumn(
+                        "Name",
+                        help="Transaction description",
+                        disabled=True
+                    ),
+                    "merchant_name": st.column_config.TextColumn(
+                        "Merchant",
+                        help="Merchant name",
+                        disabled=True
+                    ),
+                    "amount": st.column_config.NumberColumn(
+                        "Amount",
+                        format="$%.2f",
+                        disabled=True
+                    ),
+                    "ai_category": st.column_config.SelectboxColumn(
+                        "AI Category",
+                        help="Select AI category",
+                        options=sorted(all_category_options),
+                        required=False
+                    ),
+                    "notes": st.column_config.TextColumn(
+                        "Notes",
+                        help="Add your notes about this transaction"
+                    ),
+                    "tags": st.column_config.TextColumn(
+                        "Tags",
+                        help="Add comma-separated tags"
+                    ),
+                    "bank_name": st.column_config.TextColumn(
+                        "Bank",
+                        help="Bank name",
+                        disabled=True
+                    ),
+                    "transaction_id": st.column_config.TextColumn(
+                        "Transaction ID",
+                        help="Unique transaction identifier",
+                        disabled=True
+                    )
+                },
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                key="transaction_editor"
+            )
+            
+            # Add save button
+            if st.button("💾 Save Changes", type="primary"):
+                try:
+                    # Get the original dataframe
+                    original_df = data_manager.read_transactions()
+                    
+                    # Update the changed rows
+                    changes_made = 0
+                    for idx, edited_row in edited_df.iterrows():
+                        transaction_id = edited_row['transaction_id']
+                        
+                        # Find the corresponding row in the original dataframe
+                        mask = original_df['transaction_id'] == transaction_id
+                        if mask.any():
+                            # Update editable fields
+                            if 'ai_category' in edited_row:
+                                original_df.loc[mask, 'ai_category'] = edited_row['ai_category']
+                            if 'notes' in edited_row:
+                                original_df.loc[mask, 'notes'] = edited_row['notes']
+                            if 'tags' in edited_row:
+                                original_df.loc[mask, 'tags'] = edited_row['tags']
+                            changes_made += 1
+                    
+                    # Save back to CSV
+                    if changes_made > 0:
+                        original_df.to_csv(data_manager.csv_path, index=False)
+                        st.success(f"✅ Successfully saved changes to {changes_made} transactions!")
+                        st.cache_data.clear()  # Clear cache to refresh data
+                        st.rerun()  # Refresh the app to show updated data
+                    else:
+                        st.info("No changes were made.")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error saving changes: {str(e)}")
+        else:
+            # Display read-only comprehensive view
+            display_columns = [
+                'date', 'authorized_date', 'name', 'merchant_name', 'amount', 'ai_category', 'notes', 'tags',
+                'ai_reason', 'personal_finance_category', 'personal_finance_category_detailed', 'personal_finance_category_confidence',
+                'bank_name', 'account_owner', 'pending', 'transaction_id'
+            ]
+            
+            available_columns = [col for col in display_columns if col in df_display.columns]
+            
+            # Create a copy for display and convert date columns to proper datetime
+            df_for_display = df_display[available_columns].reset_index(drop=True).copy()
+            
+            # Convert date strings to datetime for proper display
+            if 'authorized_date' in df_for_display.columns:
+                df_for_display['authorized_date'] = pd.to_datetime(df_for_display['authorized_date'], errors='coerce')
+            
+            # Display transactions (read-only)
+            st.dataframe(
+                df_for_display,
+                column_config={
+                    "date": st.column_config.DateColumn(
+                        "Date",
+                        format="MM/DD/YYYY"
+                    ),
+                    "authorized_date": st.column_config.DateColumn(
+                        "Auth Date",
+                        format="MM/DD/YYYY",
+                        help="When transaction was authorized"
+                    ),
+                    "name": st.column_config.TextColumn(
+                        "Name",
+                        help="Transaction description"
+                    ),
+                    "amount": st.column_config.NumberColumn(
+                        "Amount",
+                        format="$%.2f"
+                    ),
+                    "ai_category": st.column_config.TextColumn(
+                        "AI Category"
+                    ),
+                    "ai_reason": st.column_config.TextColumn(
+                        "AI Reason",
+                        help="AI reasoning for categorization"
+                    ),
+                    "notes": st.column_config.TextColumn(
+                        "Notes",
+                        help="Notes about this transaction"
+                    ),
+                    "tags": st.column_config.TextColumn(
+                        "Tags",
+                        help="Tags for this transaction"
+                    ),
+                    "personal_finance_category": st.column_config.TextColumn(
+                        "PFC Primary",
+                        help="Plaid's primary personal finance category"
+                    ),
+                    "personal_finance_category_detailed": st.column_config.TextColumn(
+                        "PFC Detailed",
+                        help="Plaid's detailed personal finance category"
+                    ),
+                    "personal_finance_category_confidence": st.column_config.TextColumn(
+                        "PFC Confidence",
+                        help="Plaid's confidence level for the category"
+                    ),
+                    "merchant_name": st.column_config.TextColumn(
+                        "Merchant",
+                        help="Merchant name"
+                    ),
+                    "bank_name": st.column_config.TextColumn(
+                        "Bank",
+                        help="Bank name"
+                    ),
+                    "account_owner": st.column_config.TextColumn(
+                        "Account Owner",
+                        help="Account owner name"
+                    ),
+                    "pending": st.column_config.CheckboxColumn(
+                        "Pending"
+                    ),
+                    "transaction_id": st.column_config.TextColumn(
+                        "Transaction ID",
+                        help="Unique transaction identifier"
+                    )
+                },
+                use_container_width=True,
+                hide_index=True
+            )
+    
+    else:
+        st.info("No transactions match your current filters.")
+
     col1, col2 = st.columns([2, 1])
     with col1:
-        search_term = st.text_input("🔍 Search transactions", placeholder="Search by description, merchant, etc.")
-    with col2:
-        show_pending = st.checkbox("Show pending only")
-    
-    # Apply search filter
-    if search_term:
-        mask = (
-            df_filtered['name'].str.contains(search_term, case=False, na=False) |
-            df_filtered['merchant_name'].str.contains(search_term, case=False, na=False) |
-            df_filtered['ai_category'].str.contains(search_term, case=False, na=False)
-        )
-        df_display = df_filtered[mask]
-    else:
-        df_display = df_filtered
-    
-    if show_pending and 'pending' in df_display.columns:
-        df_display = df_display[df_display['pending'] == True]
-    
-    # AI Categorization section
-    st.subheader("🤖 AI Transaction Categorization")
-    
-    col1, col2 = st.columns([3, 1])
-    with col1:
         transaction_id_input = st.text_input(
-            "Transaction ID", 
+            "AI Categorize: Transaction ID", 
             placeholder="Paste transaction ID here...",
             help="Copy a transaction ID from the table below to categorize with AI"
         )
@@ -558,91 +752,6 @@ with st.expander("🏷️ Transaction Management", expanded=False):
         
         except ImportError as e:
             st.error(f"❌ Import error: {str(e)}")
-    
-    # Display transactions with editing capabilities
-    if not df_display.empty:
-        # Select columns to display and edit
-        display_columns = [
-            'date', 'authorized_date', 'name', 'amount', 'ai_category', 'ai_reason', 'ai_confidence',
-            'personal_finance_category', 'personal_finance_category_detailed', 'personal_finance_category_confidence',
-            'merchant_name', 'bank_name', 'pending', 'transaction_id'
-        ]
-        
-        available_columns = [col for col in display_columns if col in df_display.columns]
-        
-        # Create a copy for display and convert date columns to proper datetime
-        df_for_display = df_display[available_columns].reset_index(drop=True).copy()
-        
-        # Convert date strings to datetime for proper editing
-        if 'authorized_date' in df_for_display.columns:
-            df_for_display['authorized_date'] = pd.to_datetime(df_for_display['authorized_date'], errors='coerce')
-        
-        # Display transactions (non-editable)
-        st.dataframe(
-            df_for_display,
-            column_config={
-                "date": st.column_config.DateColumn(
-                    "Date",
-                    format="MM/DD/YYYY"
-                ),
-                "authorized_date": st.column_config.DateColumn(
-                    "Auth Date",
-                    format="MM/DD/YYYY",
-                    help="When transaction was authorized"
-                ),
-                "name": st.column_config.TextColumn(
-                    "Name",
-                    help="Transaction description"
-                ),
-                "amount": st.column_config.NumberColumn(
-                    "Amount",
-                    format="$%.2f"
-                ),
-                "ai_category": st.column_config.TextColumn(
-                    "Category"
-                ),
-                "ai_reason": st.column_config.TextColumn(
-                    "AI Reason",
-                    help="AI reasoning for categorization"
-                ),
-                "ai_confidence": st.column_config.TextColumn(
-                    "AI Confidence",
-                    help="AI confidence level"
-                ),
-                "personal_finance_category": st.column_config.TextColumn(
-                    "PFC Primary",
-                    help="Plaid's primary personal finance category"
-                ),
-                "personal_finance_category_detailed": st.column_config.TextColumn(
-                    "PFC Detailed",
-                    help="Plaid's detailed personal finance category"
-                ),
-                "personal_finance_category_confidence": st.column_config.TextColumn(
-                    "PFC Confidence",
-                    help="Plaid's confidence level for the category"
-                ),
-                "merchant_name": st.column_config.TextColumn(
-                    "Merchant",
-                    help="Merchant name"
-                ),
-                "bank_name": st.column_config.TextColumn(
-                    "Bank",
-                    help="Bank name"
-                ),
-                "pending": st.column_config.CheckboxColumn(
-                    "Pending"
-                ),
-                "transaction_id": st.column_config.TextColumn(
-                    "Transaction ID",
-                    help="Unique transaction identifier"
-                )
-            },
-            use_container_width=True,
-            hide_index=True
-        )
-    
-    else:
-        st.info("No transactions match your current filters.")
 
 # Main dashboard check for data availability
 if df_filtered.empty:

@@ -21,7 +21,7 @@ class DataManager:
                 'personal_finance_category', 'personal_finance_category_detailed', 'personal_finance_category_confidence',
                 'transaction_type', 'currency', 'pending', 'account_owner',
                 'location', 'payment_details', 'website',
-                'ai_category', 'ai_reason', 'ai_confidence', 'notes', 'tags', 'bank_name', 'account_name', 'created_at', 'transaction_id', 'account_id', 'check_number'
+                'ai_category', 'ai_reason', 'notes', 'tags', 'bank_name', 'account_name', 'created_at', 'transaction_id', 'account_id', 'check_number'
             ]
             
             df = pd.DataFrame(columns=columns)
@@ -129,7 +129,6 @@ class DataManager:
                 # Initialize AI categorization fields (will be populated by LLM service)
                 transaction['ai_category'] = ''
                 transaction['ai_reason'] = ''
-                transaction['ai_confidence'] = ''
                 
                 # Add timestamp for when we imported this
                 transaction['created_at'] = datetime.now().isoformat()

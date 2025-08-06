@@ -16,12 +16,19 @@ class Config:
 config = Config()
 
 CATEGORY_MAPPING = {
-    "Food and Drink": ["restaurant", "food", "grocery", "coffee", "bar"],
-    "Transportation": ["gas", "uber", "lyft", "parking", "transit"],
-    "Shopping": ["amazon", "target", "walmart", "clothing", "retail"],
-    "Bills": ["electric", "gas", "water", "internet", "phone", "insurance"],
-    "Entertainment": ["netflix", "spotify", "movie", "game", "concert"],
-    "Healthcare": ["doctor", "pharmacy", "hospital", "medical", "dental"],
-    "Income": ["payroll", "salary", "deposit", "refund"],
-    "Other": []
+  "income": ["paychecks", "interest_income", "business_income", "investment income"],
+  "benevolence": ["charity", "gifts"],
+  "transportation": ["auto_payment", "public_transit", "gas", "auto_maintenance", "parking_or_tolls", "taxi_or_ride_shares"],
+  "housing": ["mortgage", "rent", "furniture", "home_maintenance", "remodel"],
+  "utilities": ["garbage", "water", "gas_and_electric", "internet", "phone", "software_subscriptions"],
+  "food": ["groceries", "restaurants_or_bars", "coffee_shops"],
+  "travel": ["travel_general", "airfare", "accommodation"],
+  "shopping": ["shopping", "clothing", "housewares", "electronics"],
+  "lifestyle": ["personal_grooming", "hobbies", "education", "entertainment_or_recreation"],
+  "health_wellness": ["medical", "dental", "fitness"],
+  "financial": ["loan_repayment", "financial_legal_services", "atm_cash_withdrawal", "insurance", "taxes", "penalties", "hand loans", "invest"],
+  "other": ["uncategorized", "miscellaneous", "maaji bauji", "mummy-g, daddy-g", "loss", "reimburse"],
+  "transfers": ["transfer", "credit_card_payment", "to_india"]
 }
+
+    
