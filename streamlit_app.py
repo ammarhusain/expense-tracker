@@ -35,19 +35,6 @@ data_manager, sync_service = get_services()
 # Custom CSS for Mint-like styling
 st.markdown("""
 <style>
-    .metric-card {
-        background: white;
-        padding: 1rem;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        border: 1px solid #e1e5e9;
-    }
-    .stMetric {
-        background: white;
-        padding: 1rem;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
     .main-header {
         font-size: 2.5rem;
         color: #2e7d32;
@@ -590,117 +577,69 @@ with st.expander("🏷️ Transaction Management", expanded=False):
         if 'authorized_date' in df_for_display.columns:
             df_for_display['authorized_date'] = pd.to_datetime(df_for_display['authorized_date'], errors='coerce')
         
-        # Create editable dataframe
-        edited_df = st.data_editor(
+        # Display transactions (non-editable)
+        st.dataframe(
             df_for_display,
             column_config={
                 "date": st.column_config.DateColumn(
                     "Date",
-                    format="MM/DD/YYYY",
-                    disabled=True
+                    format="MM/DD/YYYY"
                 ),
                 "authorized_date": st.column_config.DateColumn(
                     "Auth Date",
                     format="MM/DD/YYYY",
-                    disabled=True,
                     help="When transaction was authorized"
                 ),
                 "name": st.column_config.TextColumn(
                     "Name",
-                    disabled=True,
                     help="Transaction description"
                 ),
                 "amount": st.column_config.NumberColumn(
                     "Amount",
-                    format="$%.2f",
-                    disabled=True
+                    format="$%.2f"
                 ),
-                "ai_category": st.column_config.SelectboxColumn(
-                    "Category",
-                    options=list(CATEGORY_MAPPING.keys()),
-                    required=True,
+                "ai_category": st.column_config.TextColumn(
+                    "Category"
                 ),
                 "ai_reason": st.column_config.TextColumn(
                     "AI Reason",
-                    disabled=True,
                     help="AI reasoning for categorization"
                 ),
                 "ai_confidence": st.column_config.TextColumn(
                     "AI Confidence",
-                    disabled=True,
                     help="AI confidence level"
                 ),
                 "personal_finance_category": st.column_config.TextColumn(
                     "PFC Primary",
-                    disabled=True,
                     help="Plaid's primary personal finance category"
                 ),
                 "personal_finance_category_detailed": st.column_config.TextColumn(
                     "PFC Detailed",
-                    disabled=True,
                     help="Plaid's detailed personal finance category"
                 ),
                 "personal_finance_category_confidence": st.column_config.TextColumn(
                     "PFC Confidence",
-                    disabled=True,
                     help="Plaid's confidence level for the category"
                 ),
                 "merchant_name": st.column_config.TextColumn(
                     "Merchant",
-                    help="Merchant name (editable)"
+                    help="Merchant name"
                 ),
                 "bank_name": st.column_config.TextColumn(
                     "Bank",
-                    disabled=True,
                     help="Bank name"
                 ),
                 "pending": st.column_config.CheckboxColumn(
-                    "Pending",
-                    disabled=True
+                    "Pending"
                 ),
                 "transaction_id": st.column_config.TextColumn(
                     "Transaction ID",
-                    disabled=True,
                     help="Unique transaction identifier"
                 )
             },
-            num_rows="dynamic",
             use_container_width=True,
-            hide_index=True,
-            key="transaction_editor"
+            hide_index=True
         )
-        
-        # Save changes button
-        if st.button("💾 Save Changes", type="primary"):
-            try:
-                # Get the original dataframe
-                original_df = data_manager.read_transactions()
-                
-                # Create a mapping from transaction_id to row index in original_df
-                if 'transaction_id' in original_df.columns and 'transaction_id' in df_display.columns:
-                    for i, row in edited_df.iterrows():
-                        if i < len(df_display):
-                            # Get the transaction_id from the original filtered display
-                            transaction_id = df_display.iloc[i]['transaction_id']
-                            
-                            # Find this transaction in the original dataframe
-                            mask = original_df['transaction_id'] == transaction_id
-                            
-                            if mask.any():
-                                # Update only the editable columns
-                                editable_columns = ['ai_category', 'merchant_name']
-                                for col in editable_columns:
-                                    if col in edited_df.columns:
-                                        value = row[col]
-                                        original_df.loc[mask, col] = value
-                
-                # Save back to CSV
-                original_df.to_csv(data_manager.csv_path, index=False)
-                st.success("✅ Changes saved successfully! Refresh the page to see updates.")
-                
-            except Exception as e:
-                st.error(f"❌ Error saving changes: {str(e)}")
-                st.error("Please try again or check your data format.")
     
     else:
         st.info("No transactions match your current filters.")
