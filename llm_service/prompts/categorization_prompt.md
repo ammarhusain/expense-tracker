@@ -81,7 +81,7 @@ You are analyzing a financial transaction to categorize it and provide reasoning
 
 Please respond with JSON only. You MUST select one of the available categories exactly as listed above:
 
-{
+{{
   "reasoning": "Short and succinct phrase explaining why this transaction belongs in this category",
   "category": "selected_category"
-}
+}}

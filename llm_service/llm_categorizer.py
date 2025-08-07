@@ -7,7 +7,7 @@ import anthropic
 from datetime import datetime
 from data_manager import DataManager
 from config import CATEGORY_MAPPING
-
+import time
 
 class TransactionLLMCategorizer:
     def __init__(self, api_key: str = None):
@@ -39,7 +39,7 @@ class TransactionLLMCategorizer:
     def get_transaction_by_id(self, transaction_id: str) -> Optional[Dict]:
         """Extract transaction data by ID from CSV with all metadata"""
         try:
-            df = self.data_manager.read_transactions()
+            df = self.data_manager.read_all()
             
             if df.empty or 'transaction_id' not in df.columns:
                 self.logger.error("No transactions found or transaction_id column missing")
@@ -88,7 +88,6 @@ class TransactionLLMCategorizer:
             plaid_categories.append(f"General: {transaction['category']}")
         
         plaid_category_str = '; '.join(plaid_categories) if plaid_categories else "None"
-        
         # Fill in the prompt template
         return self.prompt_template.format(
             date=date,
@@ -107,6 +106,7 @@ class TransactionLLMCategorizer:
         try:
             # Try to extract JSON from response
             response_text = response_text.strip()
+            self.logger.info(f"Raw LLM response: '{response_text}'")
             
             # Handle case where response might have additional text around JSON
             start_idx = response_text.find('{')
@@ -114,10 +114,19 @@ class TransactionLLMCategorizer:
             
             if start_idx != -1 and end_idx != 0:
                 json_str = response_text[start_idx:end_idx]
-                result = json.loads(json_str)
+                self.logger.info(f"Extracted JSON string: '{json_str}'")
+                
+                try:
+                    result = json.loads(json_str)
+                    self.logger.info(f"Parsed JSON result: {result}")
+                except json.JSONDecodeError as json_err:
+                    self.logger.error(f"JSON decode error: {json_err}")
+                    self.logger.error(f"Failed to parse JSON: '{json_str}'")
+                    raise ValueError(f"Invalid JSON format: {json_err}")
                 
                 # Validate required fields
                 if 'category' not in result or 'reasoning' not in result:
+                    self.logger.error(f"Missing required fields. Result keys: {list(result.keys())}")
                     raise ValueError("Missing required fields in LLM response")
                 
                 # Create list of all valid categories (values from CATEGORY_MAPPING)
@@ -127,16 +136,20 @@ class TransactionLLMCategorizer:
                 
                 # Validate category is in our mapping - must match exactly
                 if result['category'] not in valid_categories:
+                    self.logger.error(f"Invalid category '{result['category']}' not in valid list")
                     raise ValueError(f"LLM returned invalid category: '{result['category']}'. Must be one of: {valid_categories}")
                 
                 return result
                 
             else:
+                self.logger.error(f"No JSON braces found in response: '{response_text}'")
                 raise ValueError("No valid JSON found in response")
                 
         except Exception as e:
             self.logger.error(f"Error parsing LLM response: {str(e)}")
-            self.logger.error(f"Response was: {response_text}")
+            self.logger.error(f"Full response was: '{response_text}'")
+            self.logger.error(f"Exception type: {type(e).__name__}")
+            self.logger.error(f"Exception args: {e.args}")
             raise e
     
     def categorize_transaction(self, transaction_id: str) -> Dict:
@@ -148,7 +161,8 @@ class TransactionLLMCategorizer:
         
         # Format context for LLM
         prompt = self._format_transaction_context(transaction)
-
+        print(f"proimpt {prompt}")
+        time.sleep(1.0)
         # Call Claude API
         message = self.client.messages.create(
             model=self.model,
@@ -156,43 +170,10 @@ class TransactionLLMCategorizer:
             temperature=0.1,
             messages=[{"role": "user", "content": prompt}]
         )
-        print("--------------")
+        print(f"-------------- {message}")
         # Parse and return response
         response_text = message.content[0].text
 
         print(f"response_text {response_text}")
 
         return self._parse_llm_response(response_text)
-    
-    def update_transaction_category(self, transaction_id: str, category: str, reasoning: str = None) -> bool:
-        """Update the transaction category in the database"""
-        try:
-            df = self.data_manager.read_transactions()
-            
-            # Find and update the transaction
-            mask = df['transaction_id'] == transaction_id
-            if not mask.any():
-                self.logger.error(f"Transaction {transaction_id} not found for update")
-                return False
-            
-            # Update category
-            df.loc[mask, 'ai_category'] = category
-            
-            # Add reasoning to notes if provided
-            if reasoning:
-                current_notes = df.loc[mask, 'notes'].iloc[0]
-                ai_note = f"AI: {reasoning}"
-                
-                if pd.isna(current_notes) or current_notes == "":
-                    df.loc[mask, 'notes'] = ai_note
-                else:
-                    df.loc[mask, 'notes'] = f"{current_notes} | {ai_note}"
-            
-            # Save back to CSV
-            df.to_csv(self.data_manager.csv_path, index=False)
-            self.logger.info(f"Updated transaction {transaction_id} with category: {category}")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error updating transaction {transaction_id}: {str(e)}")
-            return False

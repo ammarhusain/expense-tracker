@@ -5,13 +5,12 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import numpy as np
 import time
+
+# NEW: Import new architecture
 from data_manager import DataManager
-from sync_service import TransactionSyncService
+from transaction_service import TransactionService
+from transaction_types import TransactionFilters, SyncResult
 from config import CATEGORY_MAPPING
-# Import the LLM categorizer
-import sys
-sys.path.append('llm_service')
-from llm_categorizer import TransactionLLMCategorizer
 
 # Page config
 st.set_page_config(
@@ -26,11 +25,14 @@ if 'initialized' not in st.session_state:
     st.session_state.clear()
     st.session_state.initialized = True
 
-# Initialize services
+# Initialize services with dependency injection
+@st.cache_resource
 def get_services():
-    return DataManager(), TransactionSyncService()
+    """Initialize services once and cache them."""
+    data_manager = DataManager()
+    return TransactionService(data_manager), data_manager
 
-data_manager, sync_service = get_services()
+transaction_service, data_manager = get_services()
 
 # Custom CSS for Mint-like styling
 st.markdown("""
@@ -58,11 +60,11 @@ st.markdown('<h1 class="main-header">💰 Personal Finance Tracker</h1>', unsafe
 with st.expander("🔧 Account Management", expanded=False):
     st.subheader("Sync Options")
     
-    # Get connected accounts for dropdown
-    accounts = sync_service.get_connected_accounts()
+    # Get connected accounts for dropdown using new service
+    accounts = transaction_service.get_accounts()
     account_options = ["All Accounts"]
     
-    if accounts and not accounts.get('message'):
+    if accounts:
         for bank_name in accounts.keys():
             if 'accounts' in accounts[bank_name]:
                 account_options.append(bank_name)
@@ -83,25 +85,45 @@ with st.expander("🔧 Account Management", expanded=False):
         if st.button("🔄 Incremental Sync", type="primary", help="Fetch only new transactions since last sync"):
             with st.spinner(f"Syncing new transactions for {selected_account}..."):
                 if selected_account == "All Accounts":
-                    result = sync_service.sync_all_accounts(full_sync=False)
+                    result: SyncResult = transaction_service.sync_all_accounts(full_sync=False)
                 else:
-                    result = sync_service.sync_specific_account(selected_account, full_sync=False)
-                st.write(result)
+                    result: SyncResult = transaction_service.sync_account(selected_account, full_sync=False)
+                
+                # Display structured result
+                if result.success:
+                    st.success(f"✅ Added {result.new_transactions} new transactions")
+                    if result.institution_results:
+                        for bank, count in result.institution_results.items():
+                            st.write(f"• {bank}: {count} transactions")
+                else:
+                    st.error("❌ Sync failed:")
+                    for error in result.errors:
+                        st.error(f"  - {error}")
     
     with col2:
         if st.button("🔄 Full Sync", type="secondary", help="Re-fetch all historical transactions"):
             with st.spinner(f"Performing full sync for {selected_account}..."):
                 if selected_account == "All Accounts":
-                    result = sync_service.sync_all_accounts(full_sync=True)
+                    result: SyncResult = transaction_service.sync_all_accounts(full_sync=True)
                 else:
-                    result = sync_service.sync_specific_account(selected_account, full_sync=True)
-                st.write(result)
+                    result: SyncResult = transaction_service.sync_account(selected_account, full_sync=True)
+                
+                # Display structured result
+                if result.success:
+                    st.success(f"✅ Added {result.new_transactions} new transactions")
+                    if result.institution_results:
+                        for bank, count in result.institution_results.items():
+                            st.write(f"• {bank}: {count} transactions")
+                else:
+                    st.error("❌ Sync failed:")
+                    for error in result.errors:
+                        st.error(f"  - {error}")
     
     # Connected accounts info
     st.subheader("Connected Accounts")
-    if accounts and not accounts.get('message'):
-        # Get access tokens data for additional info
-        tokens_data = sync_service.load_access_tokens()
+    if accounts:
+        # Get access tokens data for additional info using service
+        sync_status = transaction_service.get_sync_status()
         
         for bank, info in accounts.items():
             if 'accounts' in info:
@@ -115,50 +137,35 @@ with st.expander("🔧 Account Management", expanded=False):
                         st.write(f"**{acc['name']}**")
                         st.caption(f"{acc['type']} - {acc['subtype']}")
                     with col2:
-                        st.write(f"**Balance:** ${acc['balance']:,.2f}")
+                        # Use balance_current instead of balance
+                        balance = acc.get('balance_current', 0)
+                        st.write(f"**Balance:** ${balance:,.2f}")
                     with col3:
                         mask = acc.get('mask', 'N/A')
                         st.write(f"**Account:** •••• {mask}")
                 
-                # Get additional metadata from tokens
-                if bank in tokens_data:
-                    token_info = tokens_data[bank]
-                    
-                    # Format dates
-                    created_at = token_info.get('created_at')
-                    if created_at:
+                # Display sync metadata
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**Connected:**")
+                    connected_at = info.get('created_at', 'Unknown')
+                    if connected_at and connected_at != 'Unknown':
                         try:
-                            created_dt = datetime.fromisoformat(created_at)
-                            created_display = created_dt.strftime('%Y-%m-%d %H:%M')
+                            connected_dt = datetime.fromisoformat(connected_at)
+                            connected_display = connected_dt.strftime('%Y-%m-%d %H:%M')
                         except:
-                            created_display = created_at
+                            connected_display = connected_at
                     else:
-                        created_display = "Unknown"
-                    
-                    last_sync = token_info.get('last_sync')
+                        connected_display = "Unknown"
+                    st.code(connected_display)
+                with col2:
+                    st.write("**Last Sync:**")
+                    last_sync = sync_status.get(bank)
                     if last_sync:
-                        try:
-                            sync_dt = datetime.fromisoformat(last_sync)
-                            sync_display = sync_dt.strftime('%Y-%m-%d %H:%M')
-                        except:
-                            sync_display = last_sync
+                        sync_display = last_sync.strftime('%Y-%m-%d %H:%M')
                     else:
                         sync_display = "Never"
-                    
-                    cursor = token_info.get('cursor', '')
-                    cursor_display = cursor[:20] + "..." if cursor and len(cursor) > 20 else cursor or "None"
-                    
-                    # Display metadata in columns
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.write("**Connected:**")
-                        st.code(created_display)
-                    with col2:
-                        st.write("**Last Sync:**")
-                        st.code(sync_display)
-                    with col3:
-                        st.write("**Cursor:**")
-                        st.code(cursor_display)
+                    st.code(sync_display)
                 
                 # Add separator between banks
                 st.markdown("---")
@@ -256,21 +263,14 @@ with st.expander("🔗 Link New Account", expanded=False):
             else:
                 try:
                     with st.spinner("Processing account connection..."):
-                        # Exchange public token for access token
-                        access_token = plaid_client.exchange_public_token(public_token)
+                        # Use new service for account linking
+                        link_result = transaction_service.link_account(public_token, institution_name)
                         
-                        # Get account information
-                        account_info = plaid_client.get_accounts(access_token)
-                        
-                        # Save access token and account info
-                        sync_service.save_access_token(
-                            institution_name=institution_name,
-                            access_token=access_token,
-                            account_info=account_info
-                        )
-                        
-                        st.success(f"✅ Successfully connected {institution_name} with {len(account_info)} accounts!")
-                        st.info("Refresh the page to see your connected accounts above.")
+                        if link_result.success:
+                            st.success(f"✅ Successfully connected {link_result.institution_name} with {link_result.account_count} accounts!")
+                            st.info("Refresh the page to see your connected accounts above.")
+                        else:
+                            st.error(f"❌ Error processing connection: {link_result.error}")
                         
                         # Clear the link token
                         if 'link_token' in st.session_state:
@@ -280,10 +280,11 @@ with st.expander("🔗 Link New Account", expanded=False):
                     st.error(f"❌ Error processing connection: {str(e)}")
                     st.error("Please check that your public token is correct and try again.")
 
-# Load transaction data
+# Load transaction data using new service
 @st.cache_data
 def load_transactions():
-    df = data_manager.read_transactions()
+    """Load transactions using the service layer."""
+    df = transaction_service.get_transactions()
     if not df.empty and 'date' in df.columns:
         df['date'] = pd.to_datetime(df['date'])
         df['month'] = df['date'].dt.to_period('M')
@@ -596,30 +597,31 @@ with st.expander("🏷️ Transaction Management", expanded=True):
             # Add save button
             if st.button("💾 Save Changes", type="primary"):
                 try:
-                    # Get the original dataframe
-                    original_df = data_manager.read_transactions()
-                    
-                    # Update the changed rows
+                    # Prepare bulk updates for data manager
+                    updates = {}
                     changes_made = 0
+                    
                     for idx, edited_row in edited_df.iterrows():
                         transaction_id = edited_row['transaction_id']
                         
-                        # Find the corresponding row in the original dataframe
-                        mask = original_df['transaction_id'] == transaction_id
-                        if mask.any():
-                            # Update editable fields
+                        if transaction_id:
+                            # Prepare updates for this transaction
+                            row_updates = {}
                             if 'ai_category' in edited_row:
-                                original_df.loc[mask, 'ai_category'] = edited_row['ai_category']
+                                row_updates['ai_category'] = edited_row['ai_category']
                             if 'notes' in edited_row:
-                                original_df.loc[mask, 'notes'] = edited_row['notes']
+                                row_updates['notes'] = edited_row['notes']
                             if 'tags' in edited_row:
-                                original_df.loc[mask, 'tags'] = edited_row['tags']
-                            changes_made += 1
+                                row_updates['tags'] = edited_row['tags']
+                            
+                            if row_updates:
+                                updates[transaction_id] = row_updates
+                                changes_made += 1
                     
-                    # Save back to CSV
-                    if changes_made > 0:
-                        original_df.to_csv(data_manager.csv_path, index=False)
-                        st.success(f"✅ Successfully saved changes to {changes_made} transactions!")
+                    # Use data manager for bulk update
+                    if updates:
+                        updated_count = data_manager.bulk_update(updates)
+                        st.success(f"✅ Successfully saved changes to {updated_count} transactions!")
                         st.cache_data.clear()  # Clear cache to refresh data
                         st.rerun()  # Refresh the app to show updated data
                     else:
@@ -730,28 +732,66 @@ with st.expander("🏷️ Transaction Management", expanded=True):
         st.write("")  # Add spacing
         ask_ai_button = st.button("🤖 Ask AI", type="primary", disabled=not transaction_id_input)
     
-    # Handle AI categorization
+    # Bulk categorization section
+    st.subheader("Bulk AI Categorization")
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        max_count = st.number_input("Max transactions to categorize", min_value=1, max_value=100, value=10)
+        st.caption("Select number of uncategorized transactions to process")
+    with col2:
+        st.write("")  # Add spacing
+        bulk_ai_button = st.button("🔄 Bulk Categorize", type="secondary")
+    
+    # Handle single AI categorization
     if ask_ai_button and transaction_id_input:
         try:            
             with st.spinner("🤖 Analyzing transaction with Claude..."):
                 try:
-                    categorizer = TransactionLLMCategorizer()
+                    # Use new service for categorization
+                    result = transaction_service.categorize_transaction(transaction_id_input.strip())
                     
-                    # Use the synchronous method directly
-                    result = categorizer.categorize_transaction(transaction_id_input.strip())
-                    
-                    if "error" in result:
-                        st.error(f"❌ Error: {result['error']}")
+                    if result.success:
+                        st.success(f"✅ Categorized as: **{result.category}**")
+                        st.info(f"Reasoning: {result.reasoning}")
+                        # Clear cache to show updated data
+                        st.cache_data.clear()
                     else:
-                        # Display raw result
-                        st.write("**AI Result:**")
-                        st.json(result)
+                        st.error(f"❌ Error: {result.error}")
                     
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
         
         except ImportError as e:
             st.error(f"❌ Import error: {str(e)}")
+    
+    # Handle bulk AI categorization
+    if bulk_ai_button:
+        with st.spinner(f"🤖 Bulk categorizing up to {max_count} transactions..."):
+            try:
+                # Use new service for bulk categorization
+                bulk_result = transaction_service.bulk_categorize(max_count=max_count)
+                
+                if bulk_result.successful_count > 0:
+                    st.success(f"✅ Successfully categorized {bulk_result.successful_count} transactions!")
+                
+                if bulk_result.failed_count > 0:
+                    st.warning(f"⚠️ Failed to categorize {bulk_result.failed_count} transactions")
+                    
+                    # Show errors in expandable section
+                    if bulk_result.errors:
+                        with st.expander("View errors"):
+                            for error in bulk_result.errors[:10]:  # Show first 10 errors
+                                st.error(error)
+                
+                if bulk_result.successful_count == 0 and bulk_result.failed_count == 0:
+                    st.info("No uncategorized transactions found")
+                
+                # Clear cache to refresh data if any updates were made
+                if bulk_result.successful_count > 0:
+                    st.cache_data.clear()
+                
+            except Exception as e:
+                st.error(f"❌ Bulk categorization error: {str(e)}")
 
 # Main dashboard check for data availability
 if df_filtered.empty:
