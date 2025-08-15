@@ -7,6 +7,7 @@ import anthropic
 from datetime import datetime
 from data_manager import DataManager
 from config import CATEGORY_MAPPING
+from transaction_types import Transaction
 import time
 
 class TransactionLLMCategorizer:
@@ -66,26 +67,26 @@ class TransactionLLMCategorizer:
             self.logger.error(f"Error retrieving transaction {transaction_id}: {str(e)}")
             return None
     
-    def _format_transaction_context(self, transaction: Dict) -> str:
+    def _format_transaction_context(self, transaction: Transaction) -> str:
         """Format transaction data into a context string for the LLM"""
         # Extract key fields with fallbacks
-        date = transaction.get('date', 'Unknown')
-        name = transaction.get('name', '')
-        original_description = transaction.get('original_description', '')
-        merchant_name = transaction.get('merchant_name', '')
-        amount = transaction.get('amount', 0)
-        bank_name = transaction.get('bank_name', '')
-        location = transaction.get('location', '')
-        payment_details = transaction.get('payment_details', '')
+        date = transaction.date or 'Unknown'
+        name = transaction.name or ''
+        original_description = transaction.original_description or ''
+        merchant_name = transaction.merchant_name or ''
+        amount = transaction.amount or 0
+        bank_name = transaction.bank_name or ''
+        location = transaction.location or ''
+        payment_details = transaction.payment_details or ''
         
         # Format Plaid categories
         plaid_categories = []
-        if transaction.get('personal_finance_category'):
-            plaid_categories.append(f"Primary: {transaction['personal_finance_category']}")
-        if transaction.get('personal_finance_category_detailed'):
-            plaid_categories.append(f"Detailed: {transaction['personal_finance_category_detailed']}")
-        if transaction.get('category'):
-            plaid_categories.append(f"General: {transaction['category']}")
+        if transaction.personal_finance_category:
+            plaid_categories.append(f"Primary: {transaction.personal_finance_category}")
+        if transaction.personal_finance_category_detailed:
+            plaid_categories.append(f"Detailed: {transaction.personal_finance_category_detailed}")
+        if transaction.category:
+            plaid_categories.append(f"General: {transaction.category}")
         
         plaid_category_str = '; '.join(plaid_categories) if plaid_categories else "None"
         # Fill in the prompt template
@@ -152,13 +153,15 @@ class TransactionLLMCategorizer:
             self.logger.error(f"Exception args: {e.args}")
             raise e
     
-    def categorize_transaction(self, transaction_id: str) -> Dict:
-        """Main method to categorize a transaction using Claude API"""
-        # Get transaction data
-        transaction = self.get_transaction_by_id(transaction_id)
-        if not transaction:
-            return {"error": f"Transaction {transaction_id} not found"}
+    def categorize_transaction(self, transaction: Transaction) -> Dict:
+        """Main method to categorize a transaction using Claude API
         
+        Args:
+            transaction: Transaction object to categorize
+            
+        Returns:
+            Dict with 'category' and 'reasoning' keys, or 'error' key if failed
+        """
         # Format context for LLM
         prompt = self._format_transaction_context(transaction)
         print(f"proimpt {prompt}")
@@ -177,3 +180,19 @@ class TransactionLLMCategorizer:
         print(f"response_text {response_text}")
 
         return self._parse_llm_response(response_text)
+    
+    def categorize_transaction_by_id(self, transaction_id: str) -> Dict:
+        """Legacy method that reads transaction from disk - DEPRECATED
+        
+        Use categorize_transaction() with Transaction object instead for better performance
+        """
+        self.logger.warning("categorize_transaction_by_id is deprecated - pass Transaction object directly")
+        
+        # Get transaction data
+        transaction_dict = self.get_transaction_by_id(transaction_id)
+        if not transaction_dict:
+            return {"error": f"Transaction {transaction_id} not found"}
+        
+        # Convert to Transaction object
+        transaction = Transaction.from_dict(transaction_dict)
+        return self.categorize_transaction(transaction)

@@ -4,6 +4,63 @@ from typing import Optional, List, Dict, Tuple, Union
 import pandas as pd
 
 @dataclass
+class Transaction:
+    """Transaction data class with all fields."""
+    # Core transaction data
+    date: Optional[str] = None
+    name: Optional[str] = None
+    merchant_name: Optional[str] = None
+    original_description: Optional[str] = None
+    amount: Optional[float] = None
+    
+    # Plaid categorization
+    category: Optional[str] = None
+    category_detailed: Optional[str] = None
+    personal_finance_category: Optional[str] = None
+    personal_finance_category_detailed: Optional[str] = None
+    personal_finance_category_confidence: Optional[str] = None
+    
+    # Transaction metadata
+    transaction_type: Optional[str] = None
+    currency: Optional[str] = None
+    pending: Optional[bool] = None
+    account_owner: Optional[str] = None
+    location: Optional[str] = None
+    payment_details: Optional[str] = None
+    website: Optional[str] = None
+    
+    # AI categorization
+    ai_category: Optional[str] = None
+    ai_reason: Optional[str] = None
+    
+    # User fields
+    notes: Optional[str] = None
+    tags: Optional[str] = None
+    
+    # Account info
+    bank_name: Optional[str] = None
+    account_name: Optional[str] = None
+    
+    # System fields
+    created_at: Optional[str] = None
+    transaction_id: Optional[str] = None
+    account_id: Optional[str] = None
+    check_number: Optional[str] = None
+    custom_category: Optional[str] = None
+    
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'Transaction':
+        """Create Transaction from dictionary, handling extra/missing fields."""
+        # Only use fields that exist in the dataclass
+        field_names = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered_data = {k: v for k, v in data.items() if k in field_names}
+        return cls(**filtered_data)
+    
+    def to_dict(self) -> Dict:
+        """Convert Transaction to dictionary for CSV/storage."""
+        return {k: v for k, v in self.__dict__.items()}
+
+@dataclass
 class TransactionFilters:
     """Filter criteria for transaction queries."""
     date_start: Optional[datetime] = None
