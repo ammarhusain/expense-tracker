@@ -7,7 +7,7 @@ import numpy as np
 import time
 
 # NEW: Import new architecture
-from data_manager import DataManager
+from config import create_data_manager
 from transaction_service import TransactionService
 from transaction_types import TransactionFilters, SyncResult
 from config import CATEGORY_MAPPING
@@ -29,7 +29,7 @@ if 'initialized' not in st.session_state:
 @st.cache_resource
 def get_services():
     """Initialize services once and cache them."""
-    data_manager = DataManager()
+    data_manager = create_data_manager()  # Uses factory pattern
     return TransactionService(data_manager), data_manager
 
 transaction_service, data_manager = get_services()

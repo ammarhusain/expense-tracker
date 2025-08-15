@@ -5,8 +5,7 @@ import json
 import os
 import pandas as pd
 from plaid_client import PlaidClient
-from data_manager import DataManager
-from config import config
+from config import create_data_manager
 from llm_service.llm_categorizer import TransactionLLMCategorizer
 from transaction_types import (
     TransactionFilters, SyncResult, CategorizationResult, BulkCategorizationResult,
@@ -31,20 +30,20 @@ def make_json_serializable(obj):
 class TransactionService:
     """
     Business logic layer - orchestrates data operations, Plaid sync, and AI categorization.
-    No direct file I/O - delegates to DataManager.
+    No direct file I/O - delegates to DataManager (CSV or SQLite based on configuration).
     """
     
-    def __init__(self, data_manager: DataManager, plaid_client: PlaidClient = None, 
+    def __init__(self, data_manager=None, plaid_client: PlaidClient = None, 
                  categorizer: TransactionLLMCategorizer = None):
         """
         Initialize with injected dependencies.
         
         Args:
-            data_manager: Data access layer
+            data_manager: Data access layer (auto-created if None using factory pattern)
             plaid_client: Optional Plaid client (created if None)
             categorizer: Optional AI categorizer (created if None)
         """
-        self.data_manager = data_manager
+        self.data_manager = data_manager or create_data_manager()
         self.plaid_client = plaid_client or PlaidClient()
         self.categorizer = categorizer or TransactionLLMCategorizer()
         self.logger = logging.getLogger(__name__)
@@ -380,13 +379,11 @@ class TransactionService:
                        source: str = "manual") -> bool:
         """Update transaction category (manual or AI)."""
         try:
-            updates = {'ai_category': category}
-            
-            if reasoning:
-                updates['ai_reason'] = reasoning
-            
-            # Add source information to notes
             if source == "manual":
+                # For manual categories, use manual_category field
+                updates = {'manual_category': category}
+                
+                # Add manual categorization note
                 transaction = self.data_manager.read_by_id(transaction_id)
                 if transaction:
                     current_notes = transaction.get('notes', '') or ''
@@ -396,11 +393,30 @@ class TransactionService:
                         updates['notes'] = f"{current_notes} | {manual_note}"
                     else:
                         updates['notes'] = manual_note
+            else:
+                # For AI categories, use ai_category field
+                updates = {'ai_category': category}
+                
+                if reasoning:
+                    updates['ai_reason'] = reasoning
             
             return self.data_manager.update_by_id(transaction_id, updates)
             
         except Exception as e:
             self.logger.error(f"Error updating category for {transaction_id}: {e}")
+            return False
+    
+    def update_manual_category(self, transaction_id: str, category: str) -> bool:
+        """Convenience method to update manual category override."""
+        return self.update_category(transaction_id, category, source="manual")
+    
+    def clear_manual_category(self, transaction_id: str) -> bool:
+        """Clear manual category override (fall back to AI or Plaid)."""
+        try:
+            updates = {'manual_category': ''}
+            return self.data_manager.update_by_id(transaction_id, updates)
+        except Exception as e:
+            self.logger.error(f"Error clearing manual category for {transaction_id}: {e}")
             return False
     
     # DATA operations (business logic wrappers)
@@ -520,8 +536,9 @@ class TransactionService:
         )
     
     def export_data(self, filters: TransactionFilters = None, 
-                   format: str = "csv") -> pd.DataFrame:
+                   export_format: str = "csv") -> pd.DataFrame:
         """Export transactions in specified format."""
+        # Future: Could add different export formats (JSON, Excel, etc.)
         return self.get_transactions(filters)
     
     # Helper methods

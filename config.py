@@ -7,13 +7,36 @@ load_dotenv()
 
 @dataclass
 class Config:
+    # Plaid API configuration
     plaid_client_id: str = os.getenv("PLAID_CLIENT_ID", "")
     plaid_secret: str = os.getenv("PLAID_SECRET", "")
     plaid_env: str = os.getenv("PLAID_ENV", "sandbox")
-    csv_file_path: str = os.getenv("CSV_FILE_PATH", "./transactions.csv")
+    
+    # Data storage configuration - single path, format determined by extension
+    data_path: str = os.getenv("DATA_PATH", "./data/transactions.csv")  # .csv = CSV, .db = SQLite
+    
+    # SQLite configuration
+    sqlite_timeout: float = float(os.getenv("SQLITE_TIMEOUT", "30.0"))
+    
+    # General configuration
     sync_interval_hours: int = int(os.getenv("SYNC_INTERVAL_HOURS", "24"))
+    
 
 config = Config()
+
+# Factory pattern for DataManager selection based on file extension
+def create_data_manager(data_path: str = None):
+    """Factory function to create appropriate DataManager based on file extension."""
+    path = data_path or config.data_path
+    
+    if path.endswith('.db'):
+        from data_utils.sqlite_data_manager import SqliteDataManager
+        return SqliteDataManager(path)
+    elif path.endswith('.csv'):
+        from data_utils.data_manager import DataManager
+        return DataManager(path)
+    else:
+        raise ValueError(f"Unsupported data file extension: {path}. Use .csv or .db")
 
 CATEGORY_MAPPING = {
   "income": ["paychecks", "interest_income", "business_income", "investment income"],

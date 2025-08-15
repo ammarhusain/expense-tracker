@@ -5,7 +5,7 @@ from typing import Dict, Optional
 import pandas as pd
 import anthropic
 from datetime import datetime
-from data_manager import DataManager
+from data_utils.data_manager import DataManager
 from config import CATEGORY_MAPPING
 from transaction_types import Transaction
 import time
