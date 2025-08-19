@@ -180,105 +180,124 @@ with st.expander("🔗 Link New Account", expanded=False):
     from plaid_client import PlaidClient
     plaid_client = PlaidClient()
     
-    # Simplified approach - provide instructions to use FastAPI temporarily
+    # Use embedded Plaid Link (no redirect needed)
     st.markdown("""
-    **Quick Setup Instructions:**
+    **Link Your Bank Account:**
     
-    Since Plaid Link requires specific JavaScript handling, please use this simple process:
+    Click the button below to securely connect your bank account through Plaid.
     """)
     
-    col1, col2 = st.columns([1, 2])
+    # Use simple link token generation and HTML file approach (known to work)
+    st.markdown("""
+    **Link Your Bank Account:**
     
-    with col1:
-        if st.button("🔗 Get Link Token", type="primary"):
-            try:
-                with st.spinner("Creating link token..."):
-                    link_token = plaid_client.create_link_token("user_1")
-                    st.session_state['link_token'] = link_token
-                st.success("✅ Link token created!")
-            except Exception as e:
-                st.error(f"Error creating link token: {str(e)}")
+    This will create a link token and generate an HTML file for you to use with Plaid Link.
+    """)
     
-    with col2:
-        if 'link_token' in st.session_state:
-            st.text_area(
-                "Link Token (copy this):", 
-                value=st.session_state['link_token'],
-                height=100,
-                help="Copy this token to use with Plaid Link"
+    if st.button("🔗 Get Link Token & HTML", type="primary"):
+        try:
+            with st.spinner("Creating link token..."):
+                # Create simple link token
+                link_token = plaid_client.create_link_token("user_1")
+                st.session_state['link_token'] = link_token
+                
+            st.success("✅ Link token created!")
+            
+            # Create simple HTML content
+            html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Plaid Link</title>
+    <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+</head>
+<body>
+    <h2>Connect Your Bank Account</h2>
+    <button id="link-button" style="background: #00D4AA; color: white; padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; font-size: 16px;">
+        Connect Account
+    </button>
+    
+    <div id="result" style="display: none; margin-top: 20px; padding: 15px; background: #f0f8f0; border-radius: 6px;">
+        <h3>✅ Success!</h3>
+        <p><strong>Public Token:</strong> <span id="public-token"></span></p>
+        <p><strong>Institution:</strong> <span id="institution-name"></span></p>
+        <p>Copy these values back to the Streamlit app.</p>
+    </div>
+
+    <script>
+    var handler = Plaid.create({{
+        token: '{link_token}',
+        onSuccess: function(public_token, metadata) {{
+            document.getElementById('public-token').textContent = public_token;
+            document.getElementById('institution-name').textContent = metadata.institution.name;
+            document.getElementById('result').style.display = 'block';
+            document.getElementById('link-button').style.display = 'none';
+        }},
+        onExit: function(err, metadata) {{
+            if (err != null) {{
+                alert('Error: ' + JSON.stringify(err));
+            }}
+        }}
+    }});
+
+    document.getElementById('link-button').onclick = function() {{
+        handler.open();
+    }};
+    </script>
+</body>
+</html>"""
+            
+            # Offer download
+            st.download_button(
+                label="📄 Download Plaid Link HTML",
+                data=html_content,
+                file_name="plaid_link.html",
+                mime="text/html",
+                help="Download and open this file in your browser"
             )
             
-            # Load HTML template and inject variables
-            try:
-                with open('plaid_link_template.html', 'r') as f:
-                    html_template = f.read()
-                
-                # Replace placeholders with actual values
-                plaid_html = html_template.replace('{LINK_TOKEN}', st.session_state['link_token'])
-                plaid_html = plaid_html.replace('{TOKEN_PREVIEW}', st.session_state['link_token'][:20])
-                plaid_html = plaid_html.replace('{TOKEN_LOG_PREVIEW}', st.session_state['link_token'][:30])
-                
-            except FileNotFoundError:
-                st.error("❌ HTML template file not found. Please ensure 'plaid_link_template.html' exists in the project directory.")
-                plaid_html = None
+            st.info("💡 **Instructions:** Download the HTML file, open it in your browser, connect your account, then copy the tokens back here.")
             
-            if plaid_html:
-                # Save HTML to a temporary file or show instructions
-                st.download_button(
-                    label="📄 Download Plaid Link Page",
-                    data=plaid_html,
-                    file_name="plaid_link.html",
-                    mime="text/html",
-                    help="Download and open this HTML file in your browser to link your account"
-                )
-                
-                st.info("💡 **Instructions:** Download the HTML file above, open it in your browser, and link your account. Then come back here to complete the process.")
+        except Exception as e:
+            st.error(f"Error creating link token: {str(e)}")
     
-    # Form to process the linking result
+    # Manual token entry fallback
     st.markdown("---")
-    st.subheader("📝 Complete Account Connection")
+    st.subheader("📝 Manual Token Entry")
+    st.caption("Use this if the automatic link doesn't work or to paste tokens from the link above")
     
-    with st.form("process_account_link"):
-        st.markdown("After linking your account using the HTML file above, paste the information here:")
-        
+    with st.form("manual_token_entry"):
         col1, col2 = st.columns(2)
         with col1:
-            public_token = st.text_input(
+            manual_public_token = st.text_input(
                 "Public Token", 
                 placeholder="public-sandbox-...",
-                help="The public_token from the linking result"
+                help="The public_token from Plaid Link"
             )
         with col2:
-            institution_name = st.text_input(
+            manual_institution_name = st.text_input(
                 "Institution Name", 
                 placeholder="e.g., Chase, Bank of America",
-                help="The institution_name from the linking result"
+                help="The institution_name from Plaid Link"
             )
         
-        submitted = st.form_submit_button("💾 Save Connected Account", type="primary")
+        manual_submitted = st.form_submit_button("💾 Save Connected Account", type="secondary")
         
-        if submitted:
-            if not public_token or not institution_name:
+        if manual_submitted:
+            if not manual_public_token or not manual_institution_name:
                 st.error("Please provide both public token and institution name")
             else:
                 try:
                     with st.spinner("Processing account connection..."):
-                        # Use new service for account linking
-                        link_result = transaction_service.link_account(public_token, institution_name)
+                        link_result = transaction_service.link_account(manual_public_token, manual_institution_name)
                         
                         if link_result.success:
                             st.success(f"✅ Successfully connected {link_result.institution_name} with {link_result.account_count} accounts!")
                             st.info("Refresh the page to see your connected accounts above.")
                         else:
                             st.error(f"❌ Error processing connection: {link_result.error}")
-                        
-                        # Clear the link token
-                        if 'link_token' in st.session_state:
-                            del st.session_state['link_token']
-                        
+                            
                 except Exception as e:
                     st.error(f"❌ Error processing connection: {str(e)}")
-                    st.error("Please check that your public token is correct and try again.")
 
 # Load transaction data using new service
 @st.cache_data
