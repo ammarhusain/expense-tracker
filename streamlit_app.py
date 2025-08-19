@@ -325,10 +325,10 @@ with st.sidebar:
     if 'ai_category' in df_filtered.columns:
         categories = st.multiselect(
             "Categories",
-            options=sorted(df_filtered['personal_finance_category_detailed'].dropna().unique()),
-            default=sorted(df_filtered['personal_finance_category_detailed'].dropna().unique())
+            options=sorted(df_filtered['ai_category'].dropna().unique()),
+            default=sorted(df_filtered['ai_category'].dropna().unique())
         )
-        df_filtered = df_filtered[df_filtered['personal_finance_category_detailed'].isin(categories)]
+        df_filtered = df_filtered[df_filtered['ai_category'].isin(categories)]
     
     # Account filter
     if 'bank_name' in df_filtered.columns:
@@ -732,16 +732,6 @@ with st.expander("🏷️ Transaction Management", expanded=True):
         st.write("")  # Add spacing
         ask_ai_button = st.button("🤖 Ask AI", type="primary", disabled=not transaction_id_input)
     
-    # Bulk categorization section
-    st.subheader("Bulk AI Categorization")
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        max_count = st.number_input("Max transactions to categorize", min_value=1, max_value=100, value=10)
-        st.caption("Select number of uncategorized transactions to process")
-    with col2:
-        st.write("")  # Add spacing
-        bulk_ai_button = st.button("🔄 Bulk Categorize", type="secondary")
-    
     # Handle single AI categorization
     if ask_ai_button and transaction_id_input:
         try:            
@@ -764,34 +754,6 @@ with st.expander("🏷️ Transaction Management", expanded=True):
         except ImportError as e:
             st.error(f"❌ Import error: {str(e)}")
     
-    # Handle bulk AI categorization
-    if bulk_ai_button:
-        with st.spinner(f"🤖 Bulk categorizing up to {max_count} transactions..."):
-            try:
-                # Use new service for bulk categorization
-                bulk_result = transaction_service.bulk_categorize(max_count=max_count)
-                
-                if bulk_result.successful_count > 0:
-                    st.success(f"✅ Successfully categorized {bulk_result.successful_count} transactions!")
-                
-                if bulk_result.failed_count > 0:
-                    st.warning(f"⚠️ Failed to categorize {bulk_result.failed_count} transactions")
-                    
-                    # Show errors in expandable section
-                    if bulk_result.errors:
-                        with st.expander("View errors"):
-                            for error in bulk_result.errors[:10]:  # Show first 10 errors
-                                st.error(error)
-                
-                if bulk_result.successful_count == 0 and bulk_result.failed_count == 0:
-                    st.info("No uncategorized transactions found")
-                
-                # Clear cache to refresh data if any updates were made
-                if bulk_result.successful_count > 0:
-                    st.cache_data.clear()
-                
-            except Exception as e:
-                st.error(f"❌ Bulk categorization error: {str(e)}")
 
 # Main dashboard check for data availability
 if df_filtered.empty:

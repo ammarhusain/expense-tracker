@@ -6,7 +6,7 @@ import pandas as pd
 import anthropic
 from datetime import datetime
 from data_utils.data_manager import DataManager
-from config import CATEGORY_MAPPING
+from config import CATEGORY_MAPPING, create_data_manager
 from transaction_types import Transaction
 import time
 
@@ -18,12 +18,12 @@ class TransactionLLMCategorizer:
             raise ValueError("Anthropic API key not found. Set ANTHROPIC_API_KEY environment variable.")
         
         self.client = anthropic.Anthropic(api_key=self.api_key)
-        self.data_manager = DataManager()
+        self.data_manager = create_data_manager()  # Use factory pattern
         self.logger = logging.getLogger(__name__)
         
         # Model configuration
         self.model = "claude-sonnet-4-20250514"
-        self.max_tokens = 150
+        self.max_tokens = 1500
         
         # Load prompt template - throw error if not found
         self.prompt_template = self._load_prompt_template()
@@ -79,16 +79,16 @@ class TransactionLLMCategorizer:
         location = transaction.location or ''
         payment_details = transaction.payment_details or ''
         
-        # Format Plaid categories
-        plaid_categories = []
-        if transaction.personal_finance_category:
-            plaid_categories.append(f"Primary: {transaction.personal_finance_category}")
-        if transaction.personal_finance_category_detailed:
-            plaid_categories.append(f"Detailed: {transaction.personal_finance_category_detailed}")
-        if transaction.category:
-            plaid_categories.append(f"General: {transaction.category}")
+        # Use the consolidated plaid_category field and make it human-readable
+        plaid_category_str = transaction.plaid_category or "None"
         
-        plaid_category_str = '; '.join(plaid_categories) if plaid_categories else "None"
+        # Replace abbreviations with human-readable labels
+        plaid_category_str = plaid_category_str.replace("cgr:", "Category:")
+        plaid_category_str = plaid_category_str.replace("det:", "Detailed Category:")
+        plaid_category_str = plaid_category_str.replace("cnf:", "Categorization Confidence:")
+        plaid_category_str = plaid_category_str.replace("leg_cgr:", "Legacy Category:")
+        plaid_category_str = plaid_category_str.replace("leg_det:", "Legacy Detailed Category:")
+        
         # Fill in the prompt template
         return self.prompt_template.format(
             date=date,
@@ -139,7 +139,7 @@ class TransactionLLMCategorizer:
                 if result['category'] not in valid_categories:
                     self.logger.error(f"Invalid category '{result['category']}' not in valid list")
                     raise ValueError(f"LLM returned invalid category: '{result['category']}'. Must be one of: {valid_categories}")
-                
+                print(f"AI category: {result['category']}")
                 return result
                 
             else:
@@ -153,46 +153,51 @@ class TransactionLLMCategorizer:
             self.logger.error(f"Exception args: {e.args}")
             raise e
     
-    def categorize_transaction(self, transaction: Transaction) -> Dict:
-        """Main method to categorize a transaction using Claude API
+    def _categorize_with_llm(self, transaction: Transaction) -> Dict:
+        """Internal method to categorize a transaction using Claude API
         
         Args:
             transaction: Transaction object to categorize
             
         Returns:
-            Dict with 'category' and 'reasoning' keys, or 'error' key if failed
+            Dict with 'category' and 'reasoning' keys, or raises exception if failed
         """
         # Format context for LLM
         prompt = self._format_transaction_context(transaction)
-        print(f"proimpt {prompt}")
+        # print(f"prompt {prompt}")
         time.sleep(1.0)
         # Call Claude API
         message = self.client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
             temperature=0.1,
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role": "user", "content": prompt}],
+            tools=[{
+                "type": "web_search_20250305",
+                "name": "web_search"
+            }]
         )
-        print(f"-------------- {message}")
-        # Parse and return response
-        response_text = message.content[0].text
 
-        print(f"response_text {response_text}")
+        # print(f"response_msg {message}")
 
-        return self._parse_llm_response(response_text)
-    
-    def categorize_transaction_by_id(self, transaction_id: str) -> Dict:
-        """Legacy method that reads transaction from disk - DEPRECATED
-        
-        Use categorize_transaction() with Transaction object instead for better performance
-        """
-        self.logger.warning("categorize_transaction_by_id is deprecated - pass Transaction object directly")
-        
-        # Get transaction data
-        transaction_dict = self.get_transaction_by_id(transaction_id)
-        if not transaction_dict:
-            return {"error": f"Transaction {transaction_id} not found"}
-        
-        # Convert to Transaction object
-        transaction = Transaction.from_dict(transaction_dict)
-        return self.categorize_transaction(transaction)
+        # Parse and return response - handle both direct text and tool use responses
+        if hasattr(message.content[0], 'text'):
+            # Direct text response
+            response_text = message.content[0].text
+        else:
+            # Tool use response - find the final text block
+            text_blocks = [block for block in message.content if hasattr(block, 'text')]
+            if text_blocks:
+                response_text = text_blocks[-1].text  # Get the last text response
+            else:
+                raise ValueError("No text response found in LLM output")
+
+        try:
+            return self._parse_llm_response(response_text)
+        except Exception as e:
+            # If parsing fails, return error category with raw response
+            self.logger.error(f"Failed to parse LLM response: {e}")
+            return {
+                'category': 'error',
+                'reasoning': message.content
+            }

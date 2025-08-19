@@ -347,3 +347,7 @@ class DataManager:
         except Exception as e:
             self.logger.error(f"Error finding duplicates: {e}")
             return []
+    
+    def create_accounts_from_plaid(self, institution_name: str, plaid_accounts: List[Dict]) -> int:
+        """No-op for CSV compatibility. CSV doesn't have separate accounts table."""
+        return 0  # CSV doesn't create separate account records

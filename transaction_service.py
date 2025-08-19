@@ -5,7 +5,7 @@ import json
 import os
 import pandas as pd
 from plaid_client import PlaidClient
-from config import create_data_manager
+from config import create_data_manager, config
 from llm_service.llm_categorizer import TransactionLLMCategorizer
 from transaction_types import (
     TransactionFilters, SyncResult, CategorizationResult, BulkCategorizationResult,
@@ -47,7 +47,7 @@ class TransactionService:
         self.plaid_client = plaid_client or PlaidClient()
         self.categorizer = categorizer or TransactionLLMCategorizer()
         self.logger = logging.getLogger(__name__)
-        self.access_tokens_path = "./data/access_tokens.json"
+        self.access_tokens_path = config.access_tokens_path
     
     # SYNC operations
     def sync_all_accounts(self, full_sync: bool = False) -> SyncResult:
@@ -156,13 +156,13 @@ class TransactionService:
                 )
                 new_transactions.append(processed_transaction)
             
-            # Create new transactions in database
-            created_ids = self.data_manager.create(new_transactions)
+            # Create new transactions in database (handles both inserts and updates)
+            processed_ids = self.data_manager.create(new_transactions)
             
-            # Automatically categorize new transactions with AI
-            if created_ids:
-                self.logger.info(f"Auto-categorizing {len(created_ids)} new transactions")
-                for transaction_id in created_ids:
+            # Automatically categorize all processed transactions (both created and updated)
+            if processed_ids:
+                self.logger.info(f"Auto-categorizing {len(processed_ids)} processed transactions")
+                for transaction_id in processed_ids:
                     try:
                         categorization_result = self.categorize_transaction(transaction_id)
                         if not categorization_result.success:
@@ -177,15 +177,15 @@ class TransactionService:
                 access_tokens[institution_name]['last_sync'] = sync_time.isoformat()
                 self._save_access_tokens(access_tokens)
             
-            self.logger.info(f"Synced {len(created_ids)} transactions from {institution_name}")
+            self.logger.info(f"Synced {len(processed_ids)} transactions from {institution_name}")
             
             return SyncResult(
                 success=True,
-                new_transactions=len(created_ids),
+                new_transactions=len(processed_ids),
                 updated_transactions=0,
                 errors=[],
                 sync_time=sync_time,
-                institution_results={institution_name: len(created_ids)}
+                institution_results={institution_name: len(processed_ids)}
             )
             
         except Exception as e:
@@ -219,15 +219,23 @@ class TransactionService:
     
     # ACCOUNT management
     def link_account(self, public_token: str, institution_name: str) -> LinkResult:
-        """Link new Plaid account."""
+        """Link new Plaid account and initialize accounts in database."""
         try:
             # Exchange public token for access token
             access_token = self.plaid_client.exchange_public_token(public_token)
             
-            # Get account information
+            # Get account information from Plaid
             account_info = self.plaid_client.get_accounts(access_token)
             
-            # Save access token and account info
+            # Create accounts in database if using SQLite
+            accounts_created = 0
+            if hasattr(self.data_manager, 'create_accounts_from_plaid'):
+                accounts_created = self.data_manager.create_accounts_from_plaid(
+                    institution_name, account_info
+                )
+                self.logger.info(f"Created {accounts_created} accounts in database for {institution_name}")
+            
+            # Save access token and account info for sync
             self.save_access_token(institution_name, access_token, account_info)
             
             return LinkResult(
@@ -292,8 +300,23 @@ class TransactionService:
     def categorize_transaction(self, transaction_id: str) -> CategorizationResult:
         """AI categorize single transaction."""
         try:
-            # Use the existing categorizer
-            result = self.categorizer.categorize_transaction(transaction_id)
+            self.logger.info(f"GONNA START {transaction_id}")
+            # Get transaction data from database
+            transaction_dict = self.data_manager.read_by_id(transaction_id)
+            self.logger.info(f"GONNA START {transaction_dict}")
+
+            if not transaction_dict:
+                return CategorizationResult(
+                    success=False,
+                    error=f"Transaction {transaction_id} not found"
+                )
+            
+            # Convert to Transaction object
+            from transaction_types import Transaction
+            transaction = Transaction.from_dict(transaction_dict)
+            
+            # Use the LLM categorizer with Transaction object
+            result = self.categorizer._categorize_with_llm(transaction)
             
             if "error" in result:
                 return CategorizationResult(
@@ -318,20 +341,33 @@ class TransactionService:
         except Exception as e:
             error_msg = f"Error categorizing transaction {transaction_id}: {str(e)}"
             self.logger.error(error_msg)
-            # Also log the full exception details for debugging
-            self.logger.error(f"Full exception details: {repr(e)}")
             return CategorizationResult(
                 success=False,
                 error=error_msg
             )
     
-    def bulk_categorize(self, max_count: int = None) -> BulkCategorizationResult:
-        """AI categorize multiple uncategorized transactions."""
+    def bulk_categorize(self, force_recategorize: bool = False) -> BulkCategorizationResult:
+        """
+        AI categorize multiple transactions.
+        
+        Args:
+            force_recategorize: If True, recategorize ALL transactions
+                               If False, only categorize uncategorized transactions (default behavior)
+        
+        Returns:
+            BulkCategorizationResult with processing statistics
+        """
         try:
-            # Get uncategorized transactions
-            uncategorized_df = self.data_manager.read_uncategorized(limit=max_count)
+            if force_recategorize:
+                # Get all transactions
+                transactions_df = self.data_manager.read_all()
+                self.logger.info(f"Force recategorizing {len(transactions_df)} transactions")
+            else:
+                # Original behavior - only uncategorized transactions
+                transactions_df = self.data_manager.read_uncategorized()
+                self.logger.info(f"Categorizing {len(transactions_df)} uncategorized transactions")
             
-            if uncategorized_df.empty:
+            if transactions_df.empty:
                 return BulkCategorizationResult(
                     successful_count=0,
                     failed_count=0,
@@ -344,10 +380,11 @@ class TransactionService:
             failed_count = 0
             errors = []
             
-            for _, row in uncategorized_df.iterrows():
+            for _, row in transactions_df.iterrows():
                 transaction_id = row.get('transaction_id')
                 if not transaction_id:
                     continue
+                    
                 result = self.categorize_transaction(transaction_id)
                 results.append(result)
                 
@@ -357,6 +394,9 @@ class TransactionService:
                     failed_count += 1
                     if result.error:
                         errors.append(f"{transaction_id}: {result.error}")
+            
+            operation_type = "force recategorization" if force_recategorize else "categorization"
+            self.logger.info(f"Bulk {operation_type} completed: {successful_count} successful, {failed_count} failed")
             
             return BulkCategorizationResult(
                 successful_count=successful_count,

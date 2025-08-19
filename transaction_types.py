@@ -13,12 +13,8 @@ class Transaction:
     original_description: Optional[str] = None
     amount: Optional[float] = None
     
-    # Plaid categorization
-    category: Optional[str] = None
-    category_detailed: Optional[str] = None
-    personal_finance_category: Optional[str] = None
-    personal_finance_category_detailed: Optional[str] = None
-    personal_finance_category_confidence: Optional[str] = None
+    # Plaid categorization (structured string containing all Plaid category data)
+    plaid_category: Optional[str] = None
     
     # Transaction metadata
     transaction_type: Optional[str] = None

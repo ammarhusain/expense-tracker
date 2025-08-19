@@ -47,12 +47,8 @@ def setup_sqlite_database(db_path: str = None) -> bool:
         # Create database and execute schema
         conn = sqlite3.connect(db_path)
         try:
-            # Execute schema (split by semicolon for multiple statements)
-            for statement in schema_sql.split(';'):
-                statement = statement.strip()
-                if statement:
-                    conn.execute(statement)
-            conn.commit()
+            # Execute schema using executescript for proper handling of complex SQL
+            conn.executescript(schema_sql)
             
             logger.info(f"SQLite database created successfully at {db_path}")
             return True
@@ -402,6 +398,64 @@ def stats_database_cli():
         print(f"  Manual: {cat_stats['manual_categorized']}")
     
     return True
+
+def optimize_database(db_path: str = None) -> bool:
+    """
+    Apply performance optimizations to the SQLite database.
+    
+    Args:
+        db_path: Database path. If None, uses config.data_path (if .db)
+        
+    Returns:
+        bool: True if optimization successful, False otherwise
+    """
+    if db_path is None:
+        from config import config
+        if not config.data_path.endswith('.db'):
+            logger.error("DATA_PATH is not a SQLite database (.db)")
+            return False
+        db_path = config.data_path
+    
+    if not os.path.exists(db_path):
+        logger.error(f"Database does not exist: {db_path}")
+        return False
+    
+    try:
+        conn = sqlite3.connect(db_path, timeout=30.0)
+        
+        try:
+            # Apply performance optimizations
+            optimization_sql_path = os.path.join(os.path.dirname(__file__), 'performance_optimization.sql')
+            if os.path.exists(optimization_sql_path):
+                with open(optimization_sql_path, 'r') as f:
+                    optimization_sql = f.read()
+                
+                # Execute each statement separately
+                for statement in optimization_sql.split(';'):
+                    statement = statement.strip()
+                    if statement:
+                        conn.execute(statement)
+                
+                logger.info("Applied performance optimization indexes")
+            
+            # Run ANALYZE to update query planner statistics
+            conn.execute("ANALYZE")
+            logger.info("Updated query planner statistics")
+            
+            # Run VACUUM to optimize database file
+            conn.execute("VACUUM")
+            logger.info("Optimized database file structure")
+            
+            conn.commit()
+            logger.info("Database optimization completed successfully")
+            return True
+            
+        finally:
+            conn.close()
+            
+    except Exception as e:
+        logger.error(f"Error optimizing database: {e}")
+        return False
 
 if __name__ == "__main__":
     import sys

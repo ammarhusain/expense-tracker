@@ -156,6 +156,33 @@ class PlaidClient:
             self.logger.error(f"Plaid API error in get_accounts: {e}")
             raise
     
+    def _format_plaid_category_string(self, transaction: Dict) -> str:
+        """Format Plaid category data into structured string."""
+        parts = []
+        
+        # Add legacy categories if present
+        category = transaction.get('category', [None])[0] if transaction.get('category') else None
+        category_detailed = ' > '.join(transaction.get('category', [])) if transaction.get('category') else None
+        if category:
+            parts.append(f"leg_cgr: {category}")
+        if category_detailed:
+            parts.append(f"leg_det: {category_detailed}")
+        
+        # Add personal finance categories if present
+        pf_data = transaction.get('personal_finance_category', {})
+        pf_category = pf_data.get('primary') if pf_data else None
+        pf_detailed = pf_data.get('detailed') if pf_data else None
+        pf_confidence = pf_data.get('confidence_level') if pf_data else None
+        
+        if pf_category:
+            parts.append(f"cgr: {pf_category}")
+        if pf_detailed:
+            parts.append(f"det: {pf_detailed}")
+        if pf_confidence:
+            parts.append(f"cnf: {pf_confidence}")
+        
+        return ", ".join(parts) if parts else ""
+    
     def _format_transaction(self, transaction) -> Dict:
         """Format a single transaction object into our standard format"""
         # Convert transaction to dict if it's an object
@@ -207,11 +234,7 @@ class PlaidClient:
             'merchant_name': transaction.get('merchant_name'),
             'original_description': transaction.get('original_description'),
             'amount': transaction.get('amount'),
-            'category': transaction.get('category', [None])[0] if transaction.get('category') else None,
-            'category_detailed': ' > '.join(transaction.get('category', [])) if transaction.get('category') else None,
-            'personal_finance_category': transaction.get('personal_finance_category', {}).get('primary') if transaction.get('personal_finance_category') else None,
-            'personal_finance_category_detailed': transaction.get('personal_finance_category', {}).get('detailed') if transaction.get('personal_finance_category') else None,
-            'personal_finance_category_confidence': transaction.get('personal_finance_category', {}).get('confidence_level') if transaction.get('personal_finance_category') else None,
+            'plaid_category': self._format_plaid_category_string(transaction),
             'transaction_type': safe_str(transaction.get('transaction_type')),
             'currency': transaction.get('iso_currency_code', 'USD'),
             'pending': transaction.get('pending', False),
@@ -219,7 +242,6 @@ class PlaidClient:
             'location': location_string,
             'payment_details': payment_details,
             'website': transaction.get('website'),
-            'custom_category': None,  # For manual overrides
             'notes': None,  # For user notes
             'tags': None,   # For user tags
             # These will be added by sync_service

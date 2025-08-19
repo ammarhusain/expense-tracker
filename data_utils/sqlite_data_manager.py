@@ -2,7 +2,7 @@ import sqlite3
 import pandas as pd
 import os
 from datetime import datetime
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 import logging
 from contextlib import contextmanager
 from config import config
@@ -44,11 +44,8 @@ class SqliteDataManager:
                 schema_sql = f.read()
             
             with self._get_connection() as conn:
-                # Execute schema (split by semicolon for multiple statements)
-                for statement in schema_sql.split(';'):
-                    statement = statement.strip()
-                    if statement:
-                        conn.execute(statement)
+                # Execute schema - SQLite executescript handles multiple statements better
+                conn.executescript(schema_sql)
                 conn.commit()
             
             self.logger.info("Database schema created successfully")
@@ -259,13 +256,19 @@ class SqliteDataManager:
     
     def create(self, transactions: List[Dict]) -> List[str]:
         """
-        Create transactions - much simpler with embedded categories!
-        Direct INSERT with all category columns.
+        Create or update transactions (upsert behavior).
+        
+        If transaction_id already exists, updates the record with new data.
+        If transaction_id is new, inserts a new record.
+        
+        Returns list of transaction IDs that were either created or updated.
         """
         if not transactions:
             return []
         
-        created_ids = []
+        processed_ids = []
+        created_count = 0
+        updated_count = 0
         
         with self._get_connection() as conn:
             try:
@@ -276,29 +279,32 @@ class SqliteDataManager:
                     if not transaction_id:
                         continue
                     
-                    # Check if transaction already exists
-                    if self._transaction_exists(conn, transaction_id):
-                        continue
-                    
                     # Ensure account exists
                     account_id = transaction.get('account_id')
                     if account_id:
                         self._ensure_account_exists(conn, transaction)
                     
-                    # Single INSERT with all data (much simpler!)
-                    self._insert_transaction_with_categories(conn, transaction)
-                    
-                    created_ids.append(transaction_id)
+                    # Check if transaction already exists
+                    if self._transaction_exists(conn, transaction_id):
+                        # Update existing transaction with new data
+                        if self._update_existing_transaction(conn, transaction):
+                            updated_count += 1
+                            processed_ids.append(transaction_id)
+                    else:
+                        # Insert new transaction
+                        self._insert_transaction_with_categories(conn, transaction)
+                        created_count += 1
+                        processed_ids.append(transaction_id)
                 
                 conn.execute("COMMIT")
-                self.logger.info(f"Created {len(created_ids)} new transactions")
+                self.logger.info(f"Processed {len(processed_ids)} transactions: {created_count} created, {updated_count} updated")
                 
             except Exception as e:
                 conn.execute("ROLLBACK")
-                self.logger.error(f"Error creating transactions: {e}")
-                created_ids = []
+                self.logger.error(f"Error processing transactions: {e}")
+                processed_ids = []
         
-        return created_ids
+        return processed_ids
     
     def update_by_id(self, transaction_id: str, updates: Dict) -> bool:
         """Update single transaction by ID."""
@@ -488,7 +494,7 @@ class SqliteDataManager:
         return cursor.fetchone() is not None
     
     def _ensure_account_exists(self, conn: sqlite3.Connection, transaction: Dict):
-        """Ensure account exists, create if needed."""
+        """Ensure account exists, create if needed (fallback for accounts not created during linking)."""
         account_id = transaction.get('account_id')
         if not account_id:
             return
@@ -498,11 +504,14 @@ class SqliteDataManager:
         if cursor.fetchone():
             return
         
-        # Create account
+        # Create account with fallback data (should rarely happen if linking works properly)
+        bank_name = transaction.get('bank_name', 'Unknown Bank')
+        account_name = transaction.get('account_name') or f"Account {account_id[-4:]}"  # Use last 4 chars of ID
+        
         account_data = {
             'id': account_id,
-            'bank_name': transaction.get('bank_name', ''),
-            'account_name': transaction.get('account_name', ''),
+            'bank_name': bank_name,
+            'account_name': account_name,
             'account_owner': transaction.get('account_owner', '')
         }
         
@@ -516,13 +525,69 @@ class SqliteDataManager:
             account_data['account_owner']
         ))
         
-        self.logger.info(f"Created account {account_id}")
+        self.logger.warning(f"Created fallback account {account_id}: {account_name} (should have been created during linking)")
+    
+    def create_accounts_from_plaid(self, institution_name: str, plaid_accounts: List[Dict]) -> int:
+        """Create accounts in database from Plaid account data during linking."""
+        if not plaid_accounts:
+            return 0
+        
+        created_count = 0
+        
+        with self._get_connection() as conn:
+            try:
+                conn.execute("BEGIN TRANSACTION")
+                
+                for account in plaid_accounts:
+                    account_id = account.get('account_id')
+                    if not account_id:
+                        continue
+                    
+                    # Check if account already exists
+                    cursor = conn.execute("SELECT 1 FROM accounts WHERE id = ?", (account_id,))
+                    if cursor.fetchone():
+                        self.logger.info(f"Account {account_id} already exists, skipping")
+                        continue
+                    
+                    # Create account with full Plaid data
+                    account_name = (
+                        account.get('official_name') or 
+                        account.get('name') or 
+                        f"{account.get('type', 'Unknown')} Account"
+                    )
+                    
+                    account_data = {
+                        'id': account_id,
+                        'bank_name': institution_name,
+                        'account_name': account_name,
+                        'account_owner': ''  # Not available from Plaid, can be set later
+                    }
+                    
+                    conn.execute("""
+                        INSERT INTO accounts (id, bank_name, account_name, account_owner)
+                        VALUES (?, ?, ?, ?)
+                    """, (
+                        account_data['id'],
+                        account_data['bank_name'],
+                        account_data['account_name'],
+                        account_data['account_owner']
+                    ))
+                    
+                    created_count += 1
+                    self.logger.info(f"Created account {account_id}: {account_name} at {institution_name}")
+                
+                conn.commit()
+                self.logger.info(f"Successfully created {created_count} accounts for {institution_name}")
+                return created_count
+                
+            except Exception as e:
+                conn.rollback()
+                self.logger.error(f"Error creating accounts from Plaid data: {e}")
+                raise
+    
     
     def _insert_transaction_with_categories(self, conn: sqlite3.Connection, transaction: Dict):
         """Insert transaction with all embedded category data."""
-        
-        # Prepare plaid_category structured string
-        plaid_category = self._format_plaid_category_string(transaction)
         
         conn.execute("""
             INSERT INTO transactions (
@@ -546,7 +611,7 @@ class SqliteDataManager:
             transaction.get('payment_details'),
             transaction.get('website'),
             transaction.get('check_number'),
-            plaid_category,
+            transaction.get('plaid_category'),
             transaction.get('ai_category'),
             transaction.get('ai_reason'),
             transaction.get('manual_category'),
@@ -554,31 +619,116 @@ class SqliteDataManager:
             transaction.get('tags')
         ))
     
-    def _format_plaid_category_string(self, transaction: Dict) -> str:
-        """Format Plaid category data into structured string."""
-        parts = []
+    def _update_existing_transaction(self, conn: sqlite3.Connection, transaction: Dict) -> bool:
+        """
+        Update existing transaction with new data from Plaid.
         
-        # Add legacy categories if present
-        category = transaction.get('category')
-        category_detailed = transaction.get('category_detailed')
-        if category:
-            parts.append(f"leg_cgr: {category}")
-        if category_detailed:
-            parts.append(f"leg_det: {category_detailed}")
+        Only updates fields that may change from Plaid (like pending status, amounts, names).
+        Preserves user-set fields like manual_category, notes, tags.
         
-        # Add personal finance categories if present
-        pf_category = transaction.get('personal_finance_category')
-        pf_detailed = transaction.get('personal_finance_category_detailed')
-        pf_confidence = transaction.get('personal_finance_category_confidence')
+        Returns True if any fields were actually updated, False otherwise.
+        """
+        transaction_id = transaction.get('transaction_id')
+        if not transaction_id:
+            return False
         
-        if pf_category:
-            parts.append(f"cgr: {pf_category}")
-        if pf_detailed:
-            parts.append(f"det: {pf_detailed}")
-        if pf_confidence:
-            parts.append(f"cnf: {pf_confidence}")
+        # Get current transaction data
+        current = self.read_by_id(transaction_id)
+        if not current:
+            return False
         
-        return ", ".join(parts) if parts else ""
+        # Fields that can be updated from Plaid data
+        updatable_fields = {
+            'date': transaction.get('date'),
+            'name': transaction.get('name'), 
+            'merchant_name': transaction.get('merchant_name'),
+            'original_description': transaction.get('original_description'),
+            'amount': transaction.get('amount'),
+            'currency': transaction.get('currency', 'USD'),
+            'pending': transaction.get('pending', False),
+            'transaction_type': transaction.get('transaction_type'),
+            'location': transaction.get('location'),
+            'payment_details': transaction.get('payment_details'),
+            'website': transaction.get('website'),
+            'check_number': transaction.get('check_number'),
+            'plaid_category': transaction.get('plaid_category')
+        }
+        
+        # Only update fields that have actually changed
+        updates = {}
+        for field, new_value in updatable_fields.items():
+            current_value = current.get(field)
+            
+            # Handle None/empty string equivalence and type conversions
+            if self._values_differ(current_value, new_value):
+                updates[field] = new_value
+        
+        if not updates:
+            # No changes detected
+            return False
+        
+        # Add updated_at timestamp
+        updates['updated_at'] = datetime.now().isoformat()
+        
+        # Build UPDATE query
+        set_clauses = []
+        params = []
+        
+        for field, value in updates.items():
+            set_clauses.append(f"{field} = ?")
+            params.append(value)
+        
+        params.append(transaction_id)
+        
+        query = f"""
+            UPDATE transactions 
+            SET {', '.join(set_clauses)}
+            WHERE transaction_id = ?
+        """
+        
+        cursor = conn.execute(query, params)
+        
+        if cursor.rowcount > 0:
+            updated_fields = list(updates.keys())
+            self.logger.info(f"Updated transaction {transaction_id} fields: {updated_fields}")
+            return True
+        
+        return False
+    
+    def _values_differ(self, current_value, new_value) -> bool:
+        """
+        Check if two values are different, handling None/empty string equivalence
+        and float precision for amounts.
+        """
+        # Handle None/empty string equivalence
+        if not current_value and not new_value:
+            return False
+        
+        if current_value is None:
+            current_value = ""
+        if new_value is None:
+            new_value = ""
+        
+        # Convert to strings for comparison
+        current_str = str(current_value).strip()
+        new_str = str(new_value).strip()
+        
+        # For numeric values, handle float precision
+        if self._is_numeric(current_str) and self._is_numeric(new_str):
+            try:
+                return abs(float(current_str) - float(new_str)) > 0.001
+            except (ValueError, TypeError):
+                pass
+        
+        return current_str != new_str
+    
+    def _is_numeric(self, value: str) -> bool:
+        """Check if a string represents a numeric value."""
+        try:
+            float(value)
+            return True
+        except (ValueError, TypeError):
+            return False
     
     # Category Management - New simplified methods
     
@@ -601,3 +751,308 @@ class SqliteDataManager:
             transaction.get('plaid_category') or  # Use full structured string
             'Uncategorized'
         )
+    
+    # Enhanced SQLite-specific features for Step 3
+    
+    def get_category_statistics(self, date_range: Tuple[Optional[datetime], Optional[datetime]] = None) -> Dict:
+        """Get comprehensive category statistics with spending analysis."""
+        try:
+            with self._get_connection() as conn:
+                where_clause = ""
+                params = []
+                
+                if date_range and date_range[0] and date_range[1]:
+                    where_clause = "WHERE date BETWEEN ? AND ?"
+                    params = [date_range[0].date().isoformat(), date_range[1].date().isoformat()]
+                
+                # Category spending (positive amounts)
+                spending_query = f"""
+                    SELECT 
+                        COALESCE(manual_category, ai_category, 'Uncategorized') as category,
+                        COUNT(*) as transaction_count,
+                        SUM(amount) as total_spent,
+                        AVG(amount) as avg_amount,
+                        MIN(amount) as min_amount,
+                        MAX(amount) as max_amount,
+                        MIN(date) as first_transaction,
+                        MAX(date) as last_transaction
+                    FROM transactions 
+                    {where_clause} AND amount > 0
+                    GROUP BY COALESCE(manual_category, ai_category, 'Uncategorized')
+                    ORDER BY total_spent DESC
+                """
+                
+                # Income analysis (negative amounts)
+                income_query = f"""
+                    SELECT 
+                        COALESCE(manual_category, ai_category, 'Income') as category,
+                        COUNT(*) as transaction_count,
+                        SUM(ABS(amount)) as total_income,
+                        AVG(ABS(amount)) as avg_amount
+                    FROM transactions 
+                    {where_clause} AND amount < 0
+                    GROUP BY COALESCE(manual_category, ai_category, 'Income')
+                    ORDER BY total_income DESC
+                """
+                
+                # Monthly trends
+                monthly_query = f"""
+                    SELECT 
+                        substr(date, 1, 7) as month,
+                        COALESCE(manual_category, ai_category, 'Uncategorized') as category,
+                        SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as spending,
+                        SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as income,
+                        COUNT(*) as transaction_count
+                    FROM transactions 
+                    {where_clause}
+                    GROUP BY substr(date, 1, 7), COALESCE(manual_category, ai_category, 'Uncategorized')
+                    ORDER BY month DESC, spending DESC
+                """
+                
+                spending_stats = conn.execute(spending_query, params).fetchall()
+                income_stats = conn.execute(income_query, params).fetchall()
+                monthly_trends = conn.execute(monthly_query, params).fetchall()
+                
+                return {
+                    'spending_by_category': [
+                        {
+                            'category': row[0],
+                            'transaction_count': row[1],
+                            'total_spent': round(row[2], 2),
+                            'avg_amount': round(row[3], 2),
+                            'min_amount': round(row[4], 2),
+                            'max_amount': round(row[5], 2),
+                            'first_transaction': row[6],
+                            'last_transaction': row[7]
+                        } for row in spending_stats
+                    ],
+                    'income_by_category': [
+                        {
+                            'category': row[0],
+                            'transaction_count': row[1],
+                            'total_income': round(row[2], 2),
+                            'avg_amount': round(row[3], 2)
+                        } for row in income_stats
+                    ],
+                    'monthly_trends': [
+                        {
+                            'month': row[0],
+                            'category': row[1],
+                            'spending': round(row[2], 2),
+                            'income': round(row[3], 2),
+                            'transaction_count': row[4]
+                        } for row in monthly_trends
+                    ]
+                }
+                
+        except Exception as e:
+            self.logger.error(f"Error getting category statistics: {e}")
+            return {'spending_by_category': [], 'income_by_category': [], 'monthly_trends': []}
+    
+    def get_account_summaries(self) -> List[Dict]:
+        """Get comprehensive account summaries with transaction statistics."""
+        try:
+            with self._get_connection() as conn:
+                query = """
+                    SELECT 
+                        a.id,
+                        a.bank_name,
+                        a.account_name,
+                        a.account_owner,
+                        COUNT(t.transaction_id) as total_transactions,
+                        SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END) as total_spending,
+                        SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END) as total_income,
+                        AVG(t.amount) as avg_transaction,
+                        MIN(t.date) as first_transaction_date,
+                        MAX(t.date) as last_transaction_date,
+                        SUM(CASE WHEN t.pending = 1 THEN 1 ELSE 0 END) as pending_count,
+                        COUNT(CASE WHEN t.ai_category IS NOT NULL AND t.ai_category != '' THEN 1 END) as categorized_count,
+                        COUNT(CASE WHEN t.manual_category IS NOT NULL AND t.manual_category != '' THEN 1 END) as manual_categorized_count
+                    FROM accounts a
+                    LEFT JOIN transactions t ON a.id = t.account_id
+                    GROUP BY a.id, a.bank_name, a.account_name, a.account_owner
+                    ORDER BY a.bank_name, a.account_name
+                """
+                
+                rows = conn.execute(query).fetchall()
+                
+                summaries = []
+                for row in rows:
+                    net_flow = (row[7] or 0) * (row[4] or 0)  # avg_transaction * total_transactions
+                    categorization_rate = (row[11] / row[4] * 100) if row[4] > 0 else 0
+                    
+                    summaries.append({
+                        'account_id': row[0],
+                        'bank_name': row[1],
+                        'account_name': row[2],
+                        'account_owner': row[3],
+                        'total_transactions': row[4] or 0,
+                        'total_spending': round(row[5] or 0, 2),
+                        'total_income': round(row[6] or 0, 2),
+                        'net_flow': round(net_flow, 2),
+                        'avg_transaction': round(row[7] or 0, 2),
+                        'first_transaction_date': row[8],
+                        'last_transaction_date': row[9],
+                        'pending_count': row[10] or 0,
+                        'categorized_count': row[11] or 0,
+                        'manual_categorized_count': row[12] or 0,
+                        'categorization_rate': round(categorization_rate, 1)
+                    })
+                
+                return summaries
+                
+        except Exception as e:
+            self.logger.error(f"Error getting account summaries: {e}")
+            return []
+    
+    def get_spending_trends(self, category: str = None, months: int = 12) -> Dict:
+        """Get spending trends over time with optional category filtering."""
+        try:
+            with self._get_connection() as conn:
+                where_clause = "WHERE amount > 0"
+                params = []
+                
+                if category:
+                    where_clause += " AND (manual_category = ? OR (manual_category IS NULL AND ai_category = ?))"
+                    params = [category, category]
+                
+                # Monthly spending trend
+                monthly_query = f"""
+                    SELECT 
+                        substr(date, 1, 7) as month,
+                        COUNT(*) as transaction_count,
+                        SUM(amount) as total_spending,
+                        AVG(amount) as avg_transaction
+                    FROM transactions 
+                    {where_clause}
+                    GROUP BY substr(date, 1, 7)
+                    ORDER BY month DESC
+                    LIMIT ?
+                """
+                
+                params.append(months)
+                
+                # Weekly spending trend (last 12 weeks)
+                weekly_query = f"""
+                    SELECT 
+                        strftime('%Y-W%W', date) as week,
+                        COUNT(*) as transaction_count,
+                        SUM(amount) as total_spending,
+                        AVG(amount) as avg_transaction
+                    FROM transactions 
+                    {where_clause}
+                    AND date >= date('now', '-84 days')
+                    GROUP BY strftime('%Y-W%W', date)
+                    ORDER BY week DESC
+                """
+                
+                # Top merchants in the period
+                merchant_query = f"""
+                    SELECT 
+                        merchant_name,
+                        COUNT(*) as transaction_count,
+                        SUM(amount) as total_spent,
+                        AVG(amount) as avg_amount
+                    FROM transactions 
+                    {where_clause}
+                    AND merchant_name IS NOT NULL
+                    AND date >= date('now', '-{months * 30} days')
+                    GROUP BY merchant_name
+                    ORDER BY total_spent DESC
+                    LIMIT 10
+                """
+                
+                monthly_data = conn.execute(monthly_query, params[:-1] + [months]).fetchall()
+                weekly_data = conn.execute(weekly_query, params[:-1] if category else []).fetchall()
+                merchant_data = conn.execute(merchant_query, params[:-1] if category else []).fetchall()
+                
+                return {
+                    'monthly_trends': [
+                        {
+                            'month': row[0],
+                            'transaction_count': row[1],
+                            'total_spending': round(row[2], 2),
+                            'avg_transaction': round(row[3], 2)
+                        } for row in monthly_data
+                    ],
+                    'weekly_trends': [
+                        {
+                            'week': row[0],
+                            'transaction_count': row[1],
+                            'total_spending': round(row[2], 2),
+                            'avg_transaction': round(row[3], 2)
+                        } for row in weekly_data
+                    ],
+                    'top_merchants': [
+                        {
+                            'merchant_name': row[0],
+                            'transaction_count': row[1],
+                            'total_spent': round(row[2], 2),
+                            'avg_amount': round(row[3], 2)
+                        } for row in merchant_data
+                    ]
+                }
+                
+        except Exception as e:
+            self.logger.error(f"Error getting spending trends: {e}")
+            return {'monthly_trends': [], 'weekly_trends': [], 'top_merchants': []}
+    
+    def optimize_database(self) -> Dict[str, Any]:
+        """Run database optimization and return performance statistics."""
+        try:
+            with self._get_connection() as conn:
+                # Apply performance optimizations
+                optimization_sql_path = os.path.join(os.path.dirname(__file__), 'performance_optimization.sql')
+                if os.path.exists(optimization_sql_path):
+                    with open(optimization_sql_path, 'r') as f:
+                        optimization_sql = f.read()
+                    
+                    # Execute each statement separately
+                    for statement in optimization_sql.split(';'):
+                        statement = statement.strip()
+                        if statement:
+                            conn.execute(statement)
+                
+                # Run ANALYZE to update query planner statistics
+                conn.execute("ANALYZE")
+                
+                # Run VACUUM to optimize database file
+                conn.execute("VACUUM")
+                
+                # Get database statistics
+                file_size = os.path.getsize(self.db_path) / (1024 * 1024)  # MB
+                
+                # Index usage statistics
+                index_query = """
+                    SELECT name, sql 
+                    FROM sqlite_master 
+                    WHERE type = 'index' AND name NOT LIKE 'sqlite_%'
+                    ORDER BY name
+                """
+                
+                indexes = conn.execute(index_query).fetchall()
+                
+                # Table statistics
+                table_stats = {}
+                for table in ['accounts', 'transactions']:
+                    count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                    table_stats[table] = count
+                
+                return {
+                    'optimization_applied': True,
+                    'database_size_mb': round(file_size, 2),
+                    'total_indexes': len(indexes),
+                    'table_statistics': table_stats,
+                    'indexes': [{'name': idx[0], 'sql': idx[1]} for idx in indexes]
+                }
+                
+        except Exception as e:
+            self.logger.error(f"Error optimizing database: {e}")
+            return {
+                'optimization_applied': False,
+                'error': str(e),
+                'database_size_mb': 0,
+                'total_indexes': 0,
+                'table_statistics': {},
+                'indexes': []
+            }
