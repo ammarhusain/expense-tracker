@@ -90,15 +90,11 @@ class SqliteDataManager:
             a.account_name,
             a.account_owner,
             t.account_id,
-            -- Category columns (for CSV compatibility)
-            t.plaid_category as category,
-            t.plaid_category as category_detailed,
-            t.plaid_category as personal_finance_category,
-            t.plaid_category as personal_finance_category_detailed,
-            t.plaid_category as personal_finance_category_confidence,
+            -- Category columns
+            t.plaid_category,
             t.ai_category,
             t.ai_reason,
-            t.manual_category as custom_category,
+            t.manual_category,
             -- Metadata
             t.notes,
             t.tags,

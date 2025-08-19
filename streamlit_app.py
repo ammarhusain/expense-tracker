@@ -25,14 +25,81 @@ if 'initialized' not in st.session_state:
     st.session_state.clear()
     st.session_state.initialized = True
 
-# Initialize services with dependency injection
+# Database Selection
+st.sidebar.subheader("🗄️ Database Selection")
+
+# Get available .db files in data directory
+import glob
+import os
+data_dir = "./data"
+db_files = glob.glob(os.path.join(data_dir, "*.db"))
+db_options = []
+
+if db_files:
+    # Extract just the filename for display
+    db_options = [os.path.basename(db_file) for db_file in db_files]
+    
+    # Add option to use CSV if it exists
+    csv_files = glob.glob(os.path.join(data_dir, "*.csv"))
+    if csv_files:
+        csv_options = [os.path.basename(csv_file) for csv_file in csv_files]
+        db_options.extend(csv_options)
+else:
+    # Fallback to CSV files if no .db files exist
+    csv_files = glob.glob(os.path.join(data_dir, "*.csv"))
+    if csv_files:
+        db_options = [os.path.basename(csv_file) for csv_file in csv_files]
+
+# Default selection
+default_db = "transactions.prod.db" if "transactions.prod.db" in db_options else (db_options[0] if db_options else "transactions.sbox.db")
+
+selected_db = st.sidebar.selectbox(
+    "Select Database",
+    options=db_options,
+    index=db_options.index(default_db) if default_db in db_options else 0,
+    help="Choose which database file to load"
+)
+
+# Show selected database path
+selected_db_path = os.path.join(data_dir, selected_db)
+st.sidebar.caption(f"📁 Using: {selected_db_path}")
+
+# Initialize services with selected database
 @st.cache_resource
-def get_services():
-    """Initialize services once and cache them."""
-    data_manager = create_data_manager()  # Uses factory pattern
+def get_services(db_path):
+    """Initialize services with specified database path."""
+    data_manager = create_data_manager(db_path)
     return TransactionService(data_manager), data_manager
 
-transaction_service, data_manager = get_services()
+transaction_service, data_manager = get_services(selected_db_path)
+
+# Database info
+if selected_db.endswith('.db'):
+    # SQLite database info
+    try:
+        total_transactions = data_manager.count_all()
+        date_range = data_manager.get_date_range()
+        
+        st.sidebar.markdown("**Database Info:**")
+        st.sidebar.metric("Total Transactions", f"{total_transactions:,}")
+        
+        if date_range[0] and date_range[1]:
+            st.sidebar.caption(f"📅 {date_range[0].strftime('%Y-%m-%d')} to {date_range[1].strftime('%Y-%m-%d')}")
+        
+        # File size
+        file_size = os.path.getsize(selected_db_path) / (1024 * 1024)  # MB
+        st.sidebar.caption(f"💾 Size: {file_size:.1f} MB")
+        
+    except Exception as e:
+        st.sidebar.error(f"Error reading database: {str(e)}")
+else:
+    # CSV file info
+    try:
+        file_size = os.path.getsize(selected_db_path) / (1024 * 1024)  # MB
+        st.sidebar.caption(f"💾 Size: {file_size:.1f} MB")
+        st.sidebar.caption("📊 CSV Format")
+    except:
+        pass
 
 # Custom CSS for Mint-like styling
 st.markdown("""
@@ -301,16 +368,20 @@ with st.expander("🔗 Link New Account", expanded=False):
 
 # Load transaction data using new service
 @st.cache_data
-def load_transactions():
-    """Load transactions using the service layer."""
-    df = transaction_service.get_transactions()
+def load_transactions(db_path):
+    """Load transactions using the service layer with specific database."""
+    # Get fresh services for this database
+    temp_data_manager = create_data_manager(db_path)
+    temp_service = TransactionService(temp_data_manager)
+    
+    df = temp_service.get_transactions()
     if not df.empty and 'date' in df.columns:
         df['date'] = pd.to_datetime(df['date'])
         df['month'] = df['date'].dt.to_period('M')
         df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
     return df
 
-df = load_transactions()
+df = load_transactions(selected_db_path)
 
 if df.empty:
     st.warning("No transactions found. Please sync your accounts or check your data files.")
@@ -372,47 +443,6 @@ with st.sidebar:
             (df_filtered['amount'] <= max_amount)
         ]
     
-    # Export functionality
-    st.subheader("📥 Export Data")
-    
-    # Column selection for export
-    available_export_columns = [
-        'date', 'name', 'amount', 'ai_category', 'ai_reason', 'merchant_name', 
-        'bank_name', 'category', 'original_description', 'pending',
-        'transaction_id', 'account_name'
-    ]
-    
-    export_columns = st.multiselect(
-        "Export Columns",
-        options=[col for col in available_export_columns if col in df_filtered.columns],
-        default=[col for col in ['date', 'name', 'amount', 'ai_category', 'ai_reason', 'merchant_name', 'bank_name'] if col in df_filtered.columns],
-        help="Select which columns to include in the export"
-    )
-    
-    # Export button
-    if export_columns and not df_filtered.empty:
-        export_df = df_filtered[export_columns].copy()
-        
-        # Convert datetime columns to strings for CSV export
-        for col in export_df.columns:
-            if export_df[col].dtype == 'datetime64[ns]' or col in ['date', 'authorized_date']:
-                export_df[col] = pd.to_datetime(export_df[col]).dt.strftime('%Y-%m-%d')
-        
-        csv_data = export_df.to_csv(index=False)
-        
-        st.download_button(
-            label=f"📥 Export CSV ({len(export_df)} transactions)",
-            data=csv_data,
-            file_name=f"filtered_transactions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv",
-            type="primary",
-            help="Download filtered transactions as CSV file"
-        )
-    elif not export_columns:
-        st.info("Select columns to export")
-    else:
-        st.info("No transactions to export with current filters")
-
 # Key metrics and analysis sections collapsed by default
 with st.expander("📊 Financial Overview", expanded=True):
     # Key metrics row
@@ -652,8 +682,7 @@ with st.expander("🏷️ Transaction Management", expanded=True):
             # Display read-only comprehensive view
             display_columns = [
                 'date', 'authorized_date', 'name', 'merchant_name', 'amount', 'ai_category', 'notes', 'tags',
-                'ai_reason', 'personal_finance_category', 'personal_finance_category_detailed', 'personal_finance_category_confidence',
-                'bank_name', 'account_owner', 'pending', 'transaction_id'
+                'ai_reason', 'plaid_category', 'bank_name', 'account_owner', 'pending', 'transaction_id'
             ]
             
             available_columns = [col for col in display_columns if col in df_display.columns]
@@ -701,17 +730,9 @@ with st.expander("🏷️ Transaction Management", expanded=True):
                         "Tags",
                         help="Tags for this transaction"
                     ),
-                    "personal_finance_category": st.column_config.TextColumn(
-                        "PFC Primary",
+                    "plaid_category": st.column_config.TextColumn(
+                        "Plaid categorization",
                         help="Plaid's primary personal finance category"
-                    ),
-                    "personal_finance_category_detailed": st.column_config.TextColumn(
-                        "PFC Detailed",
-                        help="Plaid's detailed personal finance category"
-                    ),
-                    "personal_finance_category_confidence": st.column_config.TextColumn(
-                        "PFC Confidence",
-                        help="Plaid's confidence level for the category"
                     ),
                     "merchant_name": st.column_config.TextColumn(
                         "Merchant",
