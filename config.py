@@ -14,10 +14,7 @@ class Config:
     
     # Data storage configuration - single path, format determined by extension
     data_path: str = os.getenv("DATA_PATH", "./data/transactions.csv")  # .csv = CSV, .db = SQLite
-    
-    # Access tokens file path
-    access_tokens_path: str = os.getenv("ACCESS_TOKENS_PATH", "./data/access_tokens.json")
-    
+        
     # SQLite configuration
     sqlite_timeout: float = float(os.getenv("SQLITE_TIMEOUT", "60.0"))
     

@@ -102,7 +102,7 @@ df = load_transactions(selected_db_path)
 
 if df.empty:
     st.warning("No transactions found. Please sync your accounts or check your data files.")
-    st.stop()
+    # st.stop()
 
 # Filters in sidebar
 with st.sidebar:
@@ -160,7 +160,7 @@ with st.sidebar:
             (df_filtered['amount'] <= max_amount)
         ]
     
-# Key metrics and analysis sections collapsed by default
+# Key metrics and analysis sections collapsed by default 
 with st.expander("📊 Financial Overview", expanded=True):
     # Filter out transfer transactions for financial overview metrics
     transfer_categories = CATEGORY_MAPPING.get("transfers", [])
@@ -344,8 +344,12 @@ with st.expander("📈 Spending Analysis", expanded=True):
     with col1:
         
         # Prepare monthly data for both income and expenses (excluding transfers)
-        monthly_income = analysis_data[analysis_data['amount'] < 0].groupby('month')['amount'].sum().abs()
-        monthly_expenses = analysis_data[analysis_data['amount'] > 0].groupby('month')['amount'].sum()
+        if not analysis_data.empty and 'month' in analysis_data.columns:
+            monthly_income = analysis_data[analysis_data['amount'] < 0].groupby('month')['amount'].sum().abs()
+            monthly_expenses = analysis_data[analysis_data['amount'] > 0].groupby('month')['amount'].sum()
+        else:
+            monthly_income = pd.Series(dtype=float)
+            monthly_expenses = pd.Series(dtype=float)
         
         if not monthly_income.empty or not monthly_expenses.empty:
             # Create combined dataframe for histogram
@@ -816,13 +820,6 @@ with st.expander("🔧 Account Management", expanded=False):
 with st.expander("🔗 Link New Account", expanded=False):
     from plaid_client import PlaidClient
     plaid_client = PlaidClient()
-    
-    # Use embedded Plaid Link (no redirect needed)
-    st.markdown("""
-    **Link Your Bank Account:**
-    
-    Click the button below to securely connect your bank account through Plaid.
-    """)
     
     # Use simple link token generation and HTML file approach (known to work)
     st.markdown("""

@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:plaid.com)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "WebFetch(domain:developer.chase.com)",
+      "WebFetch(domain:www.chase.com)",
+      "WebFetch(domain:developer.jpmorgan.com)",
+      "WebFetch(domain:www.jpmorgan.com)",
+      "WebFetch(domain:developer.payments.jpmorgan.com)"
     ],
     "deny": []
   }
