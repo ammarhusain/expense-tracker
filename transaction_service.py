@@ -47,12 +47,11 @@ class TransactionService:
         self.plaid_client = plaid_client or PlaidClient()
         self.categorizer = categorizer or TransactionLLMCategorizer()
         self.logger = logging.getLogger(__name__)
-        self.access_tokens_path = config.access_tokens_path
     
     # SYNC operations
     def sync_all_accounts(self, full_sync: bool = False) -> SyncResult:
         """
-        Sync all connected accounts.
+        Sync all connected accounts using database-driven institution management.
         
         Returns:
             SyncResult with statistics and status
@@ -64,10 +63,10 @@ class TransactionService:
         errors = []
         
         try:
-            # Get all access tokens
-            access_tokens = self.load_access_tokens()
+            # Get all institutions from database
+            institutions = self.data_manager.get_all_institutions()
             
-            if not access_tokens:
+            if not institutions:
                 return SyncResult(
                     success=False,
                     new_transactions=0,
@@ -78,7 +77,8 @@ class TransactionService:
                 )
             
             # Sync each institution
-            for institution_name, token_data in access_tokens.items():
+            for institution in institutions:
+                institution_name = institution['id']
                 try:
                     result = self.sync_account(institution_name, full_sync)
                     institution_results[institution_name] = result.new_transactions
@@ -91,7 +91,7 @@ class TransactionService:
                     errors.append(error_msg)
                     self.logger.error(error_msg)
             
-            # Update access tokens with last sync time
+            # Update last sync time for all institutions
             self._update_last_sync_time(sync_time)
             
             return SyncResult(
@@ -116,13 +116,14 @@ class TransactionService:
             )
     
     def sync_account(self, institution_name: str, full_sync: bool = False) -> SyncResult:
-        """Sync specific account."""
+        """Sync specific account using database-driven institution management."""
         sync_time = datetime.now()
         
         try:
-            access_tokens = self.load_access_tokens()
+            # Get access token from database
+            access_token = self.data_manager.get_institution_access_token(institution_name)
             
-            if institution_name not in access_tokens:
+            if not access_token:
                 return SyncResult(
                     success=False,
                     new_transactions=0,
@@ -132,14 +133,11 @@ class TransactionService:
                     institution_results={}
                 )
             
-            token_data = access_tokens[institution_name]
-            access_token = token_data['access_token']
-            
-            # Get transactions from Plaid
+            # Get sync cursor from database
             if full_sync:
                 cursor = None
             else:
-                cursor = token_data.get('cursor')
+                cursor = self.data_manager.get_institution_cursor(institution_name)
             
             # Fetch transactions from Plaid
             transactions_data = self.plaid_client.transactions_sync(
@@ -170,12 +168,11 @@ class TransactionService:
                     except Exception as e:
                         self.logger.error(f"Error auto-categorizing {transaction_id}: {e}")
             
-            # Update cursor for next sync
+            # Update cursor and last sync time in database
             new_cursor = transactions_data.get('next_cursor')
             if new_cursor:
-                access_tokens[institution_name]['cursor'] = new_cursor
-                access_tokens[institution_name]['last_sync'] = sync_time.isoformat()
-                self._save_access_tokens(access_tokens)
+                self.data_manager.update_institution_cursor(institution_name, new_cursor)
+                self.data_manager.update_institution_last_sync(institution_name, sync_time.isoformat())
             
             self.logger.info(f"Synced {len(processed_ids)} transactions from {institution_name}")
             
@@ -201,12 +198,13 @@ class TransactionService:
             )
     
     def get_sync_status(self) -> Dict[str, datetime]:
-        """Get last sync time for each account."""
-        access_tokens = self.load_access_tokens()
+        """Get last sync time for each institution from database."""
+        institutions = self.data_manager.get_all_institutions()
         status = {}
         
-        for institution_name, token_data in access_tokens.items():
-            last_sync = token_data.get('last_sync')
+        for institution in institutions:
+            institution_name = institution['id']
+            last_sync = institution.get('last_sync')
             if last_sync:
                 try:
                     status[institution_name] = datetime.fromisoformat(last_sync)
@@ -219,7 +217,7 @@ class TransactionService:
     
     # ACCOUNT management
     def link_account(self, public_token: str, institution_name: str) -> LinkResult:
-        """Link new Plaid account and initialize accounts in database."""
+        """Link new Plaid account using database-driven institution management."""
         try:
             # Exchange public token for access token
             access_token = self.plaid_client.exchange_public_token(public_token)
@@ -227,16 +225,16 @@ class TransactionService:
             # Get account information from Plaid
             account_info = self.plaid_client.get_accounts(access_token)
             
-            # Create accounts in database if using SQLite
-            accounts_created = 0
-            if hasattr(self.data_manager, 'create_accounts_from_plaid'):
-                accounts_created = self.data_manager.create_accounts_from_plaid(
-                    institution_name, account_info
-                )
-                self.logger.info(f"Created {accounts_created} accounts in database for {institution_name}")
+            # Create institution record in database
+            institution_created = self.data_manager.create_institution(institution_name, access_token)
+            if not institution_created:
+                self.logger.warning(f"Institution {institution_name} may already exist, continuing with account creation")
             
-            # Save access token and account info for sync
-            self.save_access_token(institution_name, access_token, account_info)
+            # Create accounts in database
+            accounts_created = self.data_manager.create_accounts_from_plaid(
+                institution_name, account_info
+            )
+            self.logger.info(f"Created {accounts_created} accounts in database for {institution_name}")
             
             return LinkResult(
                 success=True,
@@ -255,23 +253,54 @@ class TransactionService:
             )
     
     def get_accounts(self) -> Dict[str, List[Dict]]:
-        """Get all linked accounts with balances."""
+        """Get all linked accounts with balances using database-driven management."""
         try:
-            access_tokens = self.load_access_tokens()
+            # Get accounts grouped by institution from database
+            accounts_data = self.data_manager.get_all_accounts_with_institutions()
             accounts = {}
             
-            for institution_name, token_data in access_tokens.items():
+            # For each institution, try to get fresh data from Plaid, fallback to database
+            for institution_name, institution_data in accounts_data.items():
                 try:
-                    access_token = token_data['access_token']
-                    account_info = self.plaid_client.get_accounts(access_token)
-                    accounts[institution_name] = {
-                        'accounts': account_info,
-                        'last_sync': token_data.get('last_sync'),
-                        'created_at': token_data.get('created_at')
-                    }
+                    access_token = self.data_manager.get_institution_access_token(institution_name)
+                    if access_token:
+                        # Try to get fresh account info from Plaid
+                        try:
+                            fresh_account_info = self.plaid_client.get_accounts(access_token)
+                            accounts[institution_name] = {
+                                'accounts': fresh_account_info,
+                                'last_sync': institution_data.get('last_sync'),
+                                'created_at': institution_data.get('created_at')
+                            }
+                            self.logger.info(f"Retrieved fresh account data for {institution_name}")
+                        except Exception as plaid_error:
+                            # Plaid API failed (e.g., wrong environment), use database data
+                            self.logger.warning(f"Plaid API failed for {institution_name}, using database data: {plaid_error}")
+                            accounts[institution_name] = {
+                                'accounts': institution_data.get('accounts', []),
+                                'last_sync': institution_data.get('last_sync'),
+                                'created_at': institution_data.get('created_at'),
+                                'data_source': 'database',  # Indicate we're using cached data
+                                'plaid_error': str(plaid_error)
+                            }
+                    else:
+                        # No access token found, use database data
+                        accounts[institution_name] = {
+                            'accounts': institution_data.get('accounts', []),
+                            'last_sync': institution_data.get('last_sync'),
+                            'created_at': institution_data.get('created_at'),
+                            'data_source': 'database'
+                        }
                 except Exception as e:
-                    self.logger.error(f"Error getting accounts for {institution_name}: {e}")
-                    accounts[institution_name] = {'error': str(e)}
+                    self.logger.error(f"Error processing accounts for {institution_name}: {e}")
+                    # Fallback to database data on any error
+                    accounts[institution_name] = {
+                        'accounts': institution_data.get('accounts', []),
+                        'last_sync': institution_data.get('last_sync'),
+                        'created_at': institution_data.get('created_at'),
+                        'data_source': 'database',
+                        'error': str(e)
+                    }
             
             return accounts
             
@@ -280,17 +309,16 @@ class TransactionService:
             return {}
     
     def unlink_account(self, institution_name: str) -> bool:
-        """Unlink account (removes access token)."""
+        """Unlink account using database-driven institution management."""
         try:
-            access_tokens = self.load_access_tokens()
-            
-            if institution_name in access_tokens:
-                del access_tokens[institution_name]
-                self._save_access_tokens(access_tokens)
-                self.logger.info(f"Unlinked account: {institution_name}")
+            # Delete institution and all its accounts from database
+            success = self.data_manager.delete_institution(institution_name)
+            if success:
+                self.logger.info(f"Unlinked institution: {institution_name}")
                 return True
-            
-            return False
+            else:
+                self.logger.warning(f"Institution {institution_name} not found for unlinking")
+                return False
             
         except Exception as e:
             self.logger.error(f"Error unlinking {institution_name}: {e}")
@@ -581,54 +609,14 @@ class TransactionService:
         # Future: Could add different export formats (JSON, Excel, etc.)
         return self.get_transactions(filters)
     
-    # Helper methods
-    def load_access_tokens(self) -> Dict:
-        """Load stored access tokens."""
-        try:
-            if os.path.exists(self.access_tokens_path):
-                with open(self.access_tokens_path, 'r') as f:
-                    return json.load(f)
-            return {}
-        except Exception as e:
-            self.logger.error(f"Error loading access tokens: {e}")
-            return {}
-    
-    def save_access_token(self, institution_name: str, access_token: str, account_info: List) -> None:
-        """Save new Plaid access token and account info."""
-        try:
-            tokens_data = self.load_access_tokens()
-            
-            tokens_data[institution_name] = {
-                'access_token': access_token,
-                'account_info': make_json_serializable(account_info),
-                'created_at': datetime.now().isoformat(),
-                'cursor': None,
-                'last_sync': None
-            }
-            
-            self._save_access_tokens(tokens_data)
-            self.logger.info(f"Saved access token for {institution_name}")
-            
-        except Exception as e:
-            self.logger.error(f"Error saving access token for {institution_name}: {e}")
-    
-    def _save_access_tokens(self, tokens_data: Dict) -> None:
-        """Save access tokens to file."""
-        try:
-            with open(self.access_tokens_path, 'w') as f:
-                json.dump(tokens_data, f, indent=2)
-        except Exception as e:
-            self.logger.error(f"Error saving access tokens: {e}")
-    
     def _update_last_sync_time(self, sync_time: datetime) -> None:
-        """Update last sync time for all accounts."""
+        """Update last sync time for all institutions in database."""
         try:
-            access_tokens = self.load_access_tokens()
+            institutions = self.data_manager.get_all_institutions()
             
-            for institution_name in access_tokens:
-                access_tokens[institution_name]['last_sync'] = sync_time.isoformat()
-            
-            self._save_access_tokens(access_tokens)
+            for institution in institutions:
+                institution_name = institution['id']
+                self.data_manager.update_institution_last_sync(institution_name, sync_time.isoformat())
             
         except Exception as e:
             self.logger.error(f"Error updating last sync time: {e}")

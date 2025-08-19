@@ -1,17 +1,39 @@
 -- SQLite Database Schema for Personal Finance Tracker
--- Simple 2-table design with embedded categories
+-- Enhanced schema with integrated access token management
 
--- Table 1: Account information
-CREATE TABLE accounts (
-    id TEXT PRIMARY KEY,                    
-    bank_name TEXT NOT NULL,               
-    account_name TEXT NOT NULL,             
-    account_owner TEXT,                     
+-- Table 1: Institution information (replaces access_tokens.json)
+CREATE TABLE institutions (
+    id TEXT PRIMARY KEY,                    -- Institution name (e.g., "Chase", "Ally Bank")
+    access_token TEXT NOT NULL,             -- Plaid access token
+    cursor TEXT,                            -- Sync cursor for incremental sync
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_sync TEXT,                         -- Last successful sync timestamp
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Table 2: Transactions with embedded categories (no joins needed!)
+-- Table 2: Enhanced account information with full Plaid metadata
+CREATE TABLE accounts (
+    id TEXT PRIMARY KEY,                    -- Plaid account_id
+    institution_id TEXT NOT NULL,          -- Links to institutions table
+    bank_name TEXT NOT NULL,               
+    account_name TEXT NOT NULL,
+    official_name TEXT,                     -- Plaid official name
+    account_type TEXT,                      -- checking, savings, etc.
+    account_subtype TEXT,                   -- specific subtype
+    mask TEXT,                              -- Last 4 digits
+    balance_current REAL,                   -- Current balance
+    balance_available REAL,                 -- Available balance  
+    balance_limit REAL,                     -- Credit limit
+    currency_code TEXT DEFAULT 'USD',
+    account_owner TEXT,
+    is_active BOOLEAN DEFAULT TRUE,         -- For soft deletion
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (institution_id) REFERENCES institutions (id)
+);
+
+-- Table 3: Transactions with embedded categories (unchanged)
 CREATE TABLE transactions (
     transaction_id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL,
@@ -43,7 +65,17 @@ CREATE TABLE transactions (
     FOREIGN KEY (account_id) REFERENCES accounts (id)
 );
 
--- Core query patterns
+-- Indexes for institutions table
+CREATE INDEX idx_institutions_access_token ON institutions (access_token);
+CREATE INDEX idx_institutions_last_sync ON institutions (last_sync);
+
+-- Enhanced indexes for accounts table
+CREATE INDEX idx_accounts_institution ON accounts (institution_id);
+CREATE INDEX idx_accounts_type ON accounts (account_type);
+CREATE INDEX idx_accounts_active ON accounts (is_active);
+CREATE INDEX idx_accounts_bank_name ON accounts (bank_name);
+
+-- Core transaction indexes (unchanged)
 CREATE INDEX idx_transactions_date ON transactions (date);
 CREATE INDEX idx_transactions_account ON transactions (account_id);
 CREATE INDEX idx_transactions_amount ON transactions (amount);
@@ -62,6 +94,12 @@ CREATE INDEX idx_transactions_date_amount ON transactions (date, amount);
 CREATE INDEX idx_transactions_uncategorized ON transactions (ai_category, manual_category);
 
 -- Triggers for automatic updated_at timestamps
+CREATE TRIGGER update_institutions_timestamp 
+    AFTER UPDATE ON institutions
+BEGIN
+    UPDATE institutions SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
 CREATE TRIGGER update_accounts_timestamp 
     AFTER UPDATE ON accounts
 BEGIN

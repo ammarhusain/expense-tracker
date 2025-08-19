@@ -27,19 +27,16 @@ class Config:
 
 config = Config()
 
-# Factory pattern for DataManager selection based on file extension
+# Factory pattern for DataManager - SQLite only
 def create_data_manager(data_path: str = None):
-    """Factory function to create appropriate DataManager based on file extension."""
+    """Factory function to create SQLite DataManager."""
     path = data_path or config.data_path
     
-    if path.endswith('.db'):
-        from data_utils.sqlite_data_manager import SqliteDataManager
-        return SqliteDataManager(path)
-    elif path.endswith('.csv'):
-        from data_utils.data_manager import DataManager
-        return DataManager(path)
-    else:
-        raise ValueError(f"Unsupported data file extension: {path}. Use .csv or .db")
+    if not path.endswith('.db'):
+        raise ValueError(f"Only SQLite databases (.db) are supported. Got: {path}")
+    
+    from data_utils.sqlite_data_manager import SqliteDataManager
+    return SqliteDataManager(path)
 
 CATEGORY_MAPPING = {
   "income": ["paychecks", "interest_income", "business_income", "investment income"],

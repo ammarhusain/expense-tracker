@@ -743,19 +743,40 @@ with st.expander("🔧 Account Management", expanded=False):
         
         for bank, info in accounts.items():
             if 'accounts' in info:
-                # Bank header with styling
-                st.markdown(f"### 🏦 {bank} ({len(info['accounts'])} accounts)")
+                # Bank header with styling and data source indicator
+                data_source_icon = "🔄" if info.get('data_source') != 'database' else "💾"
+                data_source_text = "fresh data" if info.get('data_source') != 'database' else "cached data"
+                
+                st.markdown(f"### 🏦 {bank} ({len(info['accounts'])} accounts) {data_source_icon}")
+                st.code(info['accounts'])
+                if info.get('data_source') == 'database':
+                    st.caption(f"ℹ️ Showing cached data from database (Plaid API unavailable)")
                 
                 # Display individual accounts
                 for acc in info['accounts']:
                     col1, col2, col3 = st.columns(3)
                     with col1:
-                        st.write(f"**{acc['official_name']}**")
-                        st.caption(f"{acc['type']} - {acc['subtype']}")
+                        # Handle both fresh API data (name/official_name) and database data (account_name)
+                        account_name = (
+                            acc.get('official_name') or 
+                            acc.get('name') or 
+                            acc.get('account_name') or 
+                            'Unknown Account'
+                        )
+                        account_type = acc.get('type') or acc.get('account_type') or 'Unknown'
+                        account_subtype = acc.get('subtype') or acc.get('account_subtype') or 'Unknown'
+                        
+                        st.write(f"**{account_name}**")
+                        # st.caption(f"{account_type} - {account_subtype}")
                     with col2:
-                        # Use balance_current instead of balance
-                        balance = acc.get('balance_current', 0)
-                        st.write(f"**Balance:** ${balance:,.2f}")
+                        # Handle both fresh API data and database data
+                        balance = acc.get('balance_current', -1)
+                        # Convert to float if it's a string, handle None
+                        try:
+                            balance_float = float(balance) if balance is not None else 0.0
+                        except (ValueError, TypeError):
+                            balance_float = 0.0
+                        st.write(f"**Balance:** ${balance_float:,.2f}")
                     with col3:
                         mask = acc.get('mask', 'N/A')
                         st.write(f"**Account:** •••• {mask}")

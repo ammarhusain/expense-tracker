@@ -523,6 +523,126 @@ class SqliteDataManager:
         
         self.logger.warning(f"Created fallback account {account_id}: {account_name} (should have been created during linking)")
     
+    # Institution Management Methods (replaces access_tokens.json)
+    
+    def create_institution(self, institution_name: str, access_token: str) -> bool:
+        """Create a new institution record."""
+        try:
+            with self._get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO institutions (id, access_token)
+                    VALUES (?, ?)
+                """, (institution_name, access_token))
+                conn.commit()
+                self.logger.info(f"Created institution: {institution_name}")
+                return True
+        except Exception as e:
+            self.logger.error(f"Error creating institution {institution_name}: {e}")
+            return False
+    
+    def get_institution_access_token(self, institution_id: str) -> Optional[str]:
+        """Get access token for an institution."""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT access_token FROM institutions WHERE id = ?", 
+                    (institution_id,)
+                )
+                result = cursor.fetchone()
+                return result[0] if result else None
+        except Exception as e:
+            self.logger.error(f"Error getting access token for {institution_id}: {e}")
+            return None
+    
+    def update_institution_cursor(self, institution_id: str, cursor: str) -> bool:
+        """Update sync cursor for an institution."""
+        try:
+            with self._get_connection() as conn:
+                conn.execute("""
+                    UPDATE institutions 
+                    SET cursor = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (cursor, institution_id))
+                conn.commit()
+                return True
+        except Exception as e:
+            self.logger.error(f"Error updating cursor for {institution_id}: {e}")
+            return False
+    
+    def update_institution_last_sync(self, institution_id: str, last_sync: str) -> bool:
+        """Update last sync timestamp for an institution."""
+        try:
+            with self._get_connection() as conn:
+                conn.execute("""
+                    UPDATE institutions 
+                    SET last_sync = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (last_sync, institution_id))
+                conn.commit()
+                return True
+        except Exception as e:
+            self.logger.error(f"Error updating last sync for {institution_id}: {e}")
+            return False
+    
+    def get_institution_cursor(self, institution_id: str) -> Optional[str]:
+        """Get sync cursor for an institution."""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT cursor FROM institutions WHERE id = ?", 
+                    (institution_id,)
+                )
+                result = cursor.fetchone()
+                return result[0] if result else None
+        except Exception as e:
+            self.logger.error(f"Error getting cursor for {institution_id}: {e}")
+            return None
+    
+    def get_all_institutions(self) -> List[Dict]:
+        """Get all institutions with their metadata."""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT id, access_token, cursor, created_at, last_sync
+                    FROM institutions
+                    ORDER BY created_at DESC
+                """)
+                institutions = []
+                for row in cursor.fetchall():
+                    institutions.append({
+                        'id': row[0],
+                        'access_token': row[1],
+                        'cursor': row[2],
+                        'created_at': row[3],
+                        'last_sync': row[4]
+                    })
+                return institutions
+        except Exception as e:
+            self.logger.error(f"Error getting institutions: {e}")
+            return []
+    
+    def delete_institution(self, institution_id: str) -> bool:
+        """Delete an institution and all its accounts (cascade)."""
+        try:
+            with self._get_connection() as conn:
+                conn.execute("BEGIN TRANSACTION")
+                
+                # Delete accounts for this institution
+                conn.execute("DELETE FROM accounts WHERE institution_id = ?", (institution_id,))
+                
+                # Delete the institution
+                conn.execute("DELETE FROM institutions WHERE id = ?", (institution_id,))
+                
+                conn.execute("COMMIT")
+                self.logger.info(f"Deleted institution {institution_id} and its accounts")
+                return True
+        except Exception as e:
+            conn.execute("ROLLBACK")
+            self.logger.error(f"Error deleting institution {institution_id}: {e}")
+            return False
+    
+    # Enhanced Account Management Methods
+    
     def create_accounts_from_plaid(self, institution_name: str, plaid_accounts: List[Dict]) -> int:
         """Create accounts in database from Plaid account data during linking."""
         if not plaid_accounts:
@@ -542,44 +662,180 @@ class SqliteDataManager:
                     # Check if account already exists
                     cursor = conn.execute("SELECT 1 FROM accounts WHERE id = ?", (account_id,))
                     if cursor.fetchone():
-                        self.logger.info(f"Account {account_id} already exists, skipping")
+                        self.logger.info(f"Account {account_id} already exists, updating")
+                        # Update existing account
+                        self._update_account_from_plaid_data(conn, account, institution_name)
                         continue
                     
-                    # Create account with full Plaid data
+                    # Create new account with full Plaid data
                     account_name = (
                         account.get('official_name') or 
                         account.get('name') or 
                         f"{account.get('type', 'Unknown')} Account"
                     )
                     
-                    account_data = {
-                        'id': account_id,
-                        'bank_name': institution_name,
-                        'account_name': account_name,
-                        'account_owner': ''  # Not available from Plaid, can be set later
-                    }
-                    
                     conn.execute("""
-                        INSERT INTO accounts (id, bank_name, account_name, account_owner)
-                        VALUES (?, ?, ?, ?)
+                        INSERT INTO accounts (
+                            id, institution_id, bank_name, account_name, official_name,
+                            account_type, account_subtype, mask, balance_current,
+                            balance_available, balance_limit, currency_code, account_owner
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
-                        account_data['id'],
-                        account_data['bank_name'],
-                        account_data['account_name'],
-                        account_data['account_owner']
+                        account_id,
+                        institution_name,
+                        institution_name,
+                        account_name,
+                        account.get('official_name'),
+                        account.get('type'),
+                        account.get('subtype'),
+                        account.get('mask'),
+                        account.get('balance_current'),
+                        account.get('balance_available'),
+                        account.get('balance_limit'),
+                        account.get('currency_code', 'USD'),
+                        ''  # account_owner not available from Plaid
                     ))
                     
                     created_count += 1
                     self.logger.info(f"Created account {account_id}: {account_name} at {institution_name}")
                 
                 conn.commit()
-                self.logger.info(f"Successfully created {created_count} accounts for {institution_name}")
+                self.logger.info(f"Successfully created/updated {created_count} accounts for {institution_name}")
                 return created_count
                 
             except Exception as e:
                 conn.rollback()
                 self.logger.error(f"Error creating accounts from Plaid data: {e}")
                 raise
+    
+    def _update_account_from_plaid_data(self, conn, account: Dict, institution_name: str):
+        """Update existing account with fresh Plaid data."""
+        account_id = account.get('account_id')
+        account_name = (
+            account.get('official_name') or 
+            account.get('name') or 
+            f"{account.get('type', 'Unknown')} Account"
+        )
+        
+        conn.execute("""
+            UPDATE accounts SET
+                account_name = ?, official_name = ?, account_type = ?,
+                account_subtype = ?, mask = ?, balance_current = ?,
+                balance_available = ?, balance_limit = ?, currency_code = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (
+            account_name,
+            account.get('official_name'),
+            account.get('type'),
+            account.get('subtype'),
+            account.get('mask'),
+            account.get('balance_current'),
+            account.get('balance_available'),
+            account.get('balance_limit'),
+            account.get('currency_code', 'USD'),
+            account_id
+        ))
+    
+    def update_account_balances(self, account_id: str, balances: Dict) -> bool:
+        """Update account balances from Plaid API."""
+        try:
+            with self._get_connection() as conn:
+                conn.execute("""
+                    UPDATE accounts SET
+                        balance_current = ?,
+                        balance_available = ?,
+                        balance_limit = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (
+                    balances.get('current'),
+                    balances.get('available'),
+                    balances.get('limit'),
+                    account_id
+                ))
+                conn.commit()
+                return True
+        except Exception as e:
+            self.logger.error(f"Error updating balances for account {account_id}: {e}")
+            return False
+    
+    def get_accounts_by_institution(self, institution_id: str) -> List[Dict]:
+        """Get all accounts for a specific institution."""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT * FROM accounts 
+                    WHERE institution_id = ? AND is_active = 1
+                    ORDER BY account_name
+                """, (institution_id,))
+                
+                accounts = []
+                for row in cursor.fetchall():
+                    # Convert sqlite3.Row to dict
+                    account = dict(row)
+                    accounts.append(account)
+                return accounts
+        except Exception as e:
+            self.logger.error(f"Error getting accounts for institution {institution_id}: {e}")
+            return []
+    
+    def get_all_accounts_with_institutions(self) -> Dict[str, Dict]:
+        """Get all accounts grouped by institution (replaces JSON file structure)."""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT 
+                        i.id as institution_id,
+                        i.created_at as institution_created_at,
+                        i.last_sync,
+                        a.id as account_id,
+                        a.account_name,
+                        a.official_name,
+                        a.account_type,
+                        a.account_subtype,
+                        a.mask,
+                        a.balance_current,
+                        a.balance_available,
+                        a.balance_limit,
+                        a.currency_code
+                    FROM institutions i
+                    LEFT JOIN accounts a ON i.id = a.institution_id
+                    WHERE a.is_active = 1 OR a.is_active IS NULL
+                    ORDER BY i.id, a.account_name
+                """)
+                
+                # Group accounts by institution
+                institutions = {}
+                for row in cursor.fetchall():
+                    inst_id = row[0]
+                    if inst_id not in institutions:
+                        institutions[inst_id] = {
+                            'created_at': row[1],
+                            'last_sync': row[2],
+                            'accounts': []
+                        }
+                    
+                    # Add account if it exists (LEFT JOIN might have NULLs)
+                    if row[3]:  # account_id exists
+                        account = {
+                            'account_id': row[3],           # a.id
+                            'name': row[4],                # a.account_name
+                            'official_name': row[5],       # a.official_name
+                            'type': row[6],                # a.account_type
+                            'subtype': row[7],             # a.account_subtype
+                            'mask': row[8],                # a.mask
+                            'balance_current': row[9],     # a.balance_current
+                            'balance_available': row[10],  # a.balance_available
+                            'balance_limit': row[11],      # a.balance_limit
+                            'currency_code': row[12]       # a.currency_code
+                        }
+                        institutions[inst_id]['accounts'].append(account)
+                
+                return institutions
+        except Exception as e:
+            self.logger.error(f"Error getting accounts with institutions: {e}")
+            return {}
     
     
     def _insert_transaction_with_categories(self, conn: sqlite3.Connection, transaction: Dict):

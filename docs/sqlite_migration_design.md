@@ -758,7 +758,7 @@ class TestPerformanceImprovements:
 ### Migration Execution Plan
 
 #### Step 1: Database Setup (Week 1)
-- [ ] Create SQLite schema with simplified 3-table structure
+- [ ] Create SQLite schema with simplified 2-table structure
 - [ ] Implement `SqliteDataManager` class with basic CRUD operations
 - [ ] Add configuration support and factory pattern
 - [ ] Create database initialization utilities
