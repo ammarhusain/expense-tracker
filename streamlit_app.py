@@ -676,6 +676,52 @@ with st.expander("🏷️ Transaction Management", expanded=True):
         except ImportError as e:
             st.error(f"❌ Import error: {str(e)}")
     
+    # Bulk AI Categorization Section    
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        force_recategorize_all = st.checkbox(
+            "Recategorize ALL transactions",
+            value=False,
+            help="If checked, will recategorize all transactions. If unchecked, only categorizes uncategorized transactions."
+        )
+    
+    with col2:
+        st.write("")  # Add spacing
+        bulk_categorize_button = st.button("🤖 Bulk Categorize", type="secondary")
+    
+    # Handle bulk AI categorization
+    if bulk_categorize_button:
+        try:
+            with st.spinner("🤖 Running bulk categorization with Claude..."):
+                # Use the checkbox value to set force_recategorize
+                result = transaction_service.bulk_categorize(force_recategorize=force_recategorize_all)
+                
+                if result.successful_count > 0:
+                    st.success(f"✅ Successfully categorized {result.successful_count} transactions!")
+                    
+                if result.failed_count > 0:
+                    st.warning(f"⚠️ Failed to categorize {result.failed_count} transactions")
+                    
+                    # Show first few errors
+                    if result.errors:
+                        with st.expander("View Errors", expanded=False):
+                            for error in result.errors[:10]:  # Show first 10 errors
+                                st.error(f"• {error}")
+                            if len(result.errors) > 10:
+                                st.info(f"... and {len(result.errors) - 10} more errors")
+                
+                if result.successful_count == 0 and result.failed_count == 0:
+                    if force_recategorize_all:
+                        st.info(f"No transactions found to categorize")
+                    else:
+                        st.info(f"No uncategorized transactions found")
+                
+                # Clear cache to show updated data
+                st.cache_data.clear()
+                
+        except Exception as e:
+            st.error(f"❌ Error in bulk categorization: {str(e)}")
+    
 # Account Management Section
 with st.expander("🔧 Account Management", expanded=False):
     st.subheader("Sync Options")
