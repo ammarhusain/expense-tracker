@@ -339,74 +339,71 @@ with st.expander("📈 Spending Analysis", expanded=True):
     else:
         st.info("No transaction data available for visualization")
     
-    # Monthly income vs expense histogram
-    col1, col2 = st.columns(2)
-    with col1:
+    # Monthly income vs expense histogram       
+    # Prepare monthly data for both income and expenses (excluding transfers)
+    if not analysis_data.empty and 'month' in analysis_data.columns:
+        monthly_income = analysis_data[analysis_data['amount'] < 0].groupby('month')['amount'].sum().abs()
+        monthly_expenses = analysis_data[analysis_data['amount'] > 0].groupby('month')['amount'].sum()
+    else:
+        monthly_income = pd.Series(dtype=float)
+        monthly_expenses = pd.Series(dtype=float)
+    
+    if not monthly_income.empty or not monthly_expenses.empty:
+        # Create combined dataframe for histogram
+        all_months = set()
+        if not monthly_income.empty:
+            all_months.update(monthly_income.index)
+        if not monthly_expenses.empty:
+            all_months.update(monthly_expenses.index)
         
-        # Prepare monthly data for both income and expenses (excluding transfers)
-        if not analysis_data.empty and 'month' in analysis_data.columns:
-            monthly_income = analysis_data[analysis_data['amount'] < 0].groupby('month')['amount'].sum().abs()
-            monthly_expenses = analysis_data[analysis_data['amount'] > 0].groupby('month')['amount'].sum()
-        else:
-            monthly_income = pd.Series(dtype=float)
-            monthly_expenses = pd.Series(dtype=float)
+        histogram_data = []
+        for month in sorted(all_months):
+            month_str = str(month)
+            
+            # Add income bar
+            income_amount = monthly_income.get(month, 0)
+            if income_amount > 0:
+                histogram_data.append({
+                    'month': month_str,
+                    'amount': income_amount,
+                    'type': 'Income'
+                })
+            
+            # Add expense bar
+            expense_amount = monthly_expenses.get(month, 0)
+            if expense_amount > 0:
+                histogram_data.append({
+                    'month': month_str,
+                    'amount': expense_amount,
+                    'type': 'Expenses'
+                })
         
-        if not monthly_income.empty or not monthly_expenses.empty:
-            # Create combined dataframe for histogram
-            all_months = set()
-            if not monthly_income.empty:
-                all_months.update(monthly_income.index)
-            if not monthly_expenses.empty:
-                all_months.update(monthly_expenses.index)
+        if histogram_data:
+            histogram_df = pd.DataFrame(histogram_data)
             
-            histogram_data = []
-            for month in sorted(all_months):
-                month_str = str(month)
-                
-                # Add income bar
-                income_amount = monthly_income.get(month, 0)
-                if income_amount > 0:
-                    histogram_data.append({
-                        'month': month_str,
-                        'amount': income_amount,
-                        'type': 'Income'
-                    })
-                
-                # Add expense bar
-                expense_amount = monthly_expenses.get(month, 0)
-                if expense_amount > 0:
-                    histogram_data.append({
-                        'month': month_str,
-                        'amount': expense_amount,
-                        'type': 'Expenses'
-                    })
-            
-            if histogram_data:
-                histogram_df = pd.DataFrame(histogram_data)
-                
-                fig_histogram = px.bar(
-                    histogram_df,
-                    x='month',
-                    y='amount',
-                    color='type',
-                    title="Monthly Income vs Expenses",
-                    barmode='group',
-                    color_discrete_map={
-                        'Income': '#2E8B57',  # Sea green
-                        'Expenses': '#DC143C'  # Crimson
-                    }
-                )
-                fig_histogram.update_layout(
-                    height=400,
-                    xaxis_title="Month",
-                    yaxis_title="Amount ($)",
-                    yaxis_tickformat="$,.0f"
-                )
-                st.plotly_chart(fig_histogram, use_container_width=True)
-            else:
-                st.info("No monthly data available")
+            fig_histogram = px.bar(
+                histogram_df,
+                x='month',
+                y='amount',
+                color='type',
+                title="Monthly Income vs Expenses",
+                barmode='group',
+                color_discrete_map={
+                    'Income': '#2E8B57',  # Sea green
+                    'Expenses': '#DC143C'  # Crimson
+                }
+            )
+            fig_histogram.update_layout(
+                height=400,
+                xaxis_title="Month",
+                yaxis_title="Amount ($)",
+                yaxis_tickformat="$,.0f"
+            )
+            st.plotly_chart(fig_histogram, use_container_width=True)
         else:
             st.info("No monthly data available")
+    else:
+        st.info("No monthly data available")
 
 with st.expander("💡 Quick Insights", expanded=False):
     if not df_filtered.empty and 'amount' in df_filtered.columns:
@@ -797,8 +794,7 @@ with st.expander("🔧 Account Management", expanded=False):
                 data_source_icon = "🔄" if info.get('data_source') != 'database' else "💾"
                 data_source_text = "fresh data" if info.get('data_source') != 'database' else "cached data"
                 
-                st.markdown(f"### 🏦 {bank} ({len(info['accounts'])} accounts) {data_source_icon}")
-                st.code(info['accounts'])
+                st.markdown(f"####### 🏦 {bank} ({len(info['accounts'])} accounts) {data_source_icon}")
                 if info.get('data_source') == 'database':
                     st.caption(f"ℹ️ Showing cached data from database (Plaid API unavailable)")
                 
@@ -834,7 +830,6 @@ with st.expander("🔧 Account Management", expanded=False):
                 # Display sync metadata
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.write("**Connected:**")
                     connected_at = info.get('created_at', 'Unknown')
                     if connected_at and connected_at != 'Unknown':
                         try:
@@ -844,16 +839,16 @@ with st.expander("🔧 Account Management", expanded=False):
                             connected_display = connected_at
                     else:
                         connected_display = "Unknown"
-                    st.code(connected_display)
+                    st.write(f"**Connected:** {connected_display}")
+
                 with col2:
-                    st.write("**Last Sync:**")
                     last_sync = sync_status.get(bank)
                     if last_sync:
                         sync_display = last_sync.strftime('%Y-%m-%d %H:%M')
                     else:
                         sync_display = "Never"
-                    st.code(sync_display)
-                
+                    st.write(f"**Last Sync:** {sync_display}")
+
                 # Add separator between banks
                 st.markdown("---")
     else:

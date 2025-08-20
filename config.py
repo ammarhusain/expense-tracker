@@ -46,8 +46,8 @@ CATEGORY_MAPPING = {
   "shopping": ["shopping", "clothing", "housewares", "electronics"],
   "lifestyle": ["personal_grooming", "hobbies", "education", "entertainment_or_recreation"],
   "health_wellness": ["medical", "dental", "fitness"],
-  "financial": ["loan_repayment", "financial_legal_services", "atm_cash_withdrawal", "insurance", "taxes", "penalties", "hand loans", "invest"],
-  "other": ["uncategorized", "miscellaneous", "maaji bauji", "mummy-g, daddy-g", "loss", "reimburse"],
+  "financial": ["loan_repayment", "financial_legal_services", "atm_cash_withdrawal", "insurance", "taxes", "penalties", "hand_loans", "invest"],
+  "other": ["uncategorized", "miscellaneous", "maaji_bauji", "mummy-g_daddy-g", "loss", "reimburse"],
   "transfers": ["transfer", "credit_card_payment", "to_india"]
 }
 
