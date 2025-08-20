@@ -67,8 +67,8 @@ class TransactionLLMCategorizer:
             self.logger.error(f"Error retrieving transaction {transaction_id}: {str(e)}")
             return None
     
-    def _format_transaction_context(self, transaction: Transaction) -> str:
-        """Format transaction data into a context string for the LLM"""
+    def _format_transaction_context(self, transaction: Transaction, potential_transfers: list = None) -> str:
+        """Format transaction data into a context string for the LLM with optional transfer context"""
         # Extract key fields with fallbacks
         date = transaction.date or 'Unknown'
         name = transaction.name or ''
@@ -89,8 +89,8 @@ class TransactionLLMCategorizer:
         plaid_category_str = plaid_category_str.replace("leg_cgr:", "Legacy Category:")
         plaid_category_str = plaid_category_str.replace("leg_det:", "Legacy Detailed Category:")
         
-        # Fill in the prompt template
-        return self.prompt_template.format(
+        # Build the base prompt
+        base_prompt = self.prompt_template.format(
             date=date,
             name=name,
             original_description=original_description,
@@ -101,6 +101,39 @@ class TransactionLLMCategorizer:
             payment_details=payment_details,
             plaid_categories=plaid_category_str
         )
+        
+        # Add transfer detection context if potential matches found
+        if potential_transfers:
+            transfer_context += "Potential matching transactions:\n"
+            for i, match in enumerate(potential_transfers[:3], 1):  # Show up to 3 matches
+                match_amount = match.get('amount', 0)
+                match_date = match.get('date', 'Unknown')
+                match_bank = match.get('bank_name', 'Unknown')
+                match_account = match.get('account_name', 'Unknown')
+                match_name = match.get('name', 'Unknown')
+                
+                # Calculate time difference
+                try:
+                    from datetime import datetime
+                    current_date = datetime.fromisoformat(date)
+                    match_date_obj = datetime.fromisoformat(match_date)
+                    days_diff = abs((current_date - match_date_obj).days)
+                    time_diff = f"{days_diff} days apart" if days_diff > 0 else "same day"
+                except:
+                    time_diff = "unknown time difference"
+                
+                transfer_context += f"{i}. ${match_amount:.2f} from {match_bank} ({match_account}) on {match_date}\n"
+                transfer_context += f"   Description: {match_name}\n"
+                transfer_context += f"   Time difference: {time_diff}\n"
+                transfer_context += f"   Same institution: {'Yes' if match_bank == bank_name else 'No'}\n\n"
+            
+            transfer_context += "If this appears to be a transfer between your own accounts, categorize it as 'transfer'."
+            transfer_context += "Consider the timing, amounts, and whether the accounts belong to the same person/institution.\n"
+            
+            # Append transfer context to the base prompt
+            return base_prompt + transfer_context
+        
+        return base_prompt
     
     def _parse_llm_response(self, response_text: str) -> Dict:
         """Parse LLM JSON response and validate format"""
@@ -153,17 +186,18 @@ class TransactionLLMCategorizer:
             self.logger.error(f"Exception args: {e.args}")
             raise e
     
-    def _categorize_with_llm(self, transaction: Transaction) -> Dict:
+    def _categorize_with_llm(self, transaction: Transaction, potential_transfers: list = None) -> Dict:
         """Internal method to categorize a transaction using Claude API
         
         Args:
             transaction: Transaction object to categorize
+            potential_transfers: List of potential matching transfer transactions
             
         Returns:
             Dict with 'category' and 'reasoning' keys, or raises exception if failed
         """
         # Format context for LLM
-        prompt = self._format_transaction_context(transaction)
+        prompt = self._format_transaction_context(transaction, potential_transfers)
         # print(f"prompt {prompt}")
         time.sleep(1.0)
         # Call Claude API

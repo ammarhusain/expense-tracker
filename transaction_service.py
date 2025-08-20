@@ -157,16 +157,16 @@ class TransactionService:
             # Create new transactions in database (handles both inserts and updates)
             processed_ids = self.data_manager.create(new_transactions)
             
-            # Automatically categorize all processed transactions (both created and updated)
-            if processed_ids:
-                self.logger.info(f"Auto-categorizing {len(processed_ids)} processed transactions")
-                for transaction_id in processed_ids:
-                    try:
-                        categorization_result = self.categorize_transaction(transaction_id)
-                        if not categorization_result.success:
-                            self.logger.warning(f"Failed to categorize {transaction_id}: {categorization_result.error}")
-                    except Exception as e:
-                        self.logger.error(f"Error auto-categorizing {transaction_id}: {e}")
+            # # Automatically categorize all processed transactions (both created and updated)
+            # if processed_ids:
+            #     self.logger.info(f"Auto-categorizing {len(processed_ids)} processed transactions")
+            #     for transaction_id in processed_ids:
+            #         try:
+            #             categorization_result = self.categorize_transaction(transaction_id)
+            #             if not categorization_result.success:
+            #                 self.logger.warning(f"Failed to categorize {transaction_id}: {categorization_result.error}")
+            #         except Exception as e:
+            #             self.logger.error(f"Error auto-categorizing {transaction_id}: {e}")
             
             # Update cursor and last sync time in database
             new_cursor = transactions_data.get('next_cursor')
@@ -326,7 +326,7 @@ class TransactionService:
     
     # CATEGORIZATION operations
     def categorize_transaction(self, transaction_id: str) -> CategorizationResult:
-        """AI categorize single transaction."""
+        """AI categorize single transaction with transfer detection."""
         try:
             self.logger.info(f"GONNA START {transaction_id}")
             # Get transaction data from database
@@ -339,12 +339,20 @@ class TransactionService:
                     error=f"Transaction {transaction_id} not found"
                 )
             
+            # Find potential transfer matches
+            potential_transfers = self.data_manager.find_potential_transfers(
+                transaction_id=transaction_id,
+                amount=float(transaction_dict.get('amount', 0)),
+                date=transaction_dict.get('date', ''),
+                account_id=transaction_dict.get('account_id', '')
+            )
+            
             # Convert to Transaction object
             from transaction_types import Transaction
             transaction = Transaction.from_dict(transaction_dict)
             
-            # Use the LLM categorizer with Transaction object
-            result = self.categorizer._categorize_with_llm(transaction)
+            # Use the LLM categorizer with Transaction object and potential transfers
+            result = self.categorizer._categorize_with_llm(transaction, potential_transfers=potential_transfers)
             
             if "error" in result:
                 return CategorizationResult(

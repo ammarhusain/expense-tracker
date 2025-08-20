@@ -1004,6 +1004,73 @@ class SqliteDataManager:
             'Uncategorized'
         )
     
+    def find_potential_transfers(self, transaction_id: str, amount: float, date: str, 
+                               account_id: str, days_window: int = 3) -> List[Dict]:
+        """
+        Find transactions with matching amounts from different accounts within a date window.
+        
+        Args:
+            transaction_id: Current transaction ID (to exclude from results)
+            amount: Transaction amount to match (will look for opposite sign)
+            date: Transaction date
+            account_id: Current account ID (to exclude from results) 
+            days_window: Days before/after to search (default 3)
+        
+        Returns:
+            List of potential matching transactions with account info
+        """
+        try:
+            # Look for opposite sign amount (if current is -500, look for +500)
+            target_amount = -amount
+            
+            query = """
+            SELECT 
+                t.transaction_id,
+                t.amount,
+                t.date,
+                t.name,
+                t.merchant_name,
+                a.bank_name,
+                a.account_name,
+                a.id as account_id
+            FROM transactions t
+            JOIN accounts a ON t.account_id = a.id
+            WHERE t.transaction_id != ?
+            AND t.account_id != ?
+            AND ABS(t.amount - ?) < 0.01
+            AND t.date BETWEEN date(?, '-{} days') AND date(?, '+{} days')
+            ORDER BY ABS(julianday(t.date) - julianday(?)) ASC
+            LIMIT 5
+            """.format(days_window, days_window)
+            
+            params = [
+                transaction_id,
+                account_id, 
+                target_amount,
+                date, date,
+                date
+            ]
+            
+            with self._get_connection() as conn:
+                cursor = conn.execute(query, params)
+                matches = []
+                for row in cursor.fetchall():
+                    matches.append({
+                        'transaction_id': row[0],
+                        'amount': row[1],
+                        'date': row[2],
+                        'name': row[3],
+                        'merchant_name': row[4],
+                        'bank_name': row[5],
+                        'account_name': row[6],
+                        'account_id': row[7]
+                    })
+                return matches
+                
+        except Exception as e:
+            self.logger.error(f"Error finding potential transfers: {e}")
+            return []
+    
     # Enhanced SQLite-specific features for Step 3
     
     def get_category_statistics(self, date_range: Tuple[Optional[datetime], Optional[datetime]] = None) -> Dict:
