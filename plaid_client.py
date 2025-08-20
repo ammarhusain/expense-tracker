@@ -5,6 +5,7 @@ from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
+from plaid.model.link_token_transactions import LinkTokenTransactions
 from plaid.model.country_code import CountryCode
 from plaid.model.products import Products
 from plaid.configuration import Configuration
@@ -86,26 +87,20 @@ class PlaidClient:
     
     def create_link_token(self, user_id: str) -> str:
         try:
-            # Create base request
+            # Create base request with transactions configuration
             request = LinkTokenCreateRequest(
                 products=[Products('transactions')],
                 client_name="Personal Finance Tracker",
                 country_codes=[CountryCode('US')],
                 language='en',
-                user=LinkTokenCreateRequestUser(client_user_id=user_id)
+                user=LinkTokenCreateRequestUser(client_user_id=user_id),
+                transactions=LinkTokenTransactions(
+                    days_requested=730  # Request 24 months (730 days) of transaction history
+                )
             )
             
             # Note: redirect_uri only needed for OAuth institutions in production
             # and must be configured in Plaid dashboard first
-            
-            # Manually add transactions to the request object's internal dictionary
-            # This bypasses the validation but allows us to set the parameter
-            if hasattr(request, '_data_types_map'):
-                # For newer SDK versions
-                request._data_types_map['transactions'] = dict
-            
-            # Set the transactions parameter directly
-            request.__dict__['transactions'] = {'days_requested': 730}
             
             response = self.client.link_token_create(request)
             response_dict = response.to_dict() if hasattr(response, 'to_dict') else response
@@ -255,7 +250,8 @@ class PlaidClient:
 
     def transactions_sync(self, access_token: str, cursor: Optional[str] = None) -> Dict:
         """
-        Sync transactions using Plaid's sync API with cursor-based pagination
+        Sync transactions using Plaid's sync API with cursor-based pagination.
+        Automatically handles pagination to fetch ALL available transactions.
         
         Args:
             access_token: The access token for the account
@@ -263,62 +259,99 @@ class PlaidClient:
             
         Returns:
             Dict containing:
-            - transactions: List of formatted transactions
-            - added: Number of added transactions
-            - modified: Number of modified transactions  
-            - removed: List of removed transaction IDs
-            - next_cursor: Cursor for next sync
-            - has_more: Boolean indicating if more data available
+            - transactions: List of ALL formatted transactions (from all pages)
+            - added: Total number of added transactions (across all pages)
+            - modified: Total number of modified transactions (across all pages)
+            - removed: List of removed transaction IDs (from all pages)
+            - next_cursor: Final cursor for next sync
+            - pages_fetched: Number of API calls made
         """
         print(f"Transaction sync called - access_token:{access_token}, cursor: {cursor[:20] if cursor else 'None'}")
         
+        # Accumulators for all pages
+        all_formatted_transactions = []
+        total_added = 0
+        total_modified = 0
+        all_removed = []
+        final_cursor = cursor
+        pages_fetched = 0
+        
         try:
-            request_params = {
-                'access_token': access_token
-            }
+            # Keep fetching until has_more is False
+            current_cursor = cursor
             
-            if cursor:
-                request_params['cursor'] = cursor
+            while True:
+                pages_fetched += 1
+                print(f"Fetching page {pages_fetched}, cursor: {current_cursor[:20] if current_cursor else 'None'}")
                 
-            request = TransactionsSyncRequest(**request_params)
-            response = self.client.transactions_sync(request)
-            
-            # Log the raw API response for debugging
-            self._log_api_response("transactions_sync", response, access_token)
-            
-            # Convert response to dict for easier access
-            response_dict = response.to_dict() if hasattr(response, 'to_dict') else response
-            
-            print(f"Response summary: added={len(response_dict.get('added', []))}, modified={len(response_dict.get('modified', []))}, has_more={response_dict.get('has_more', False)}, next_cursor={response_dict.get('next_cursor', '')[:20] if response_dict.get('next_cursor') else 'empty'}")
-            
-            # Format the transactions using consistent formatting logic
-            formatted_transactions = []
-            
-            # Process added transactions
-            for transaction in response_dict.get('added', []):
-                formatted_transaction = self._format_transaction(transaction)
-                formatted_transactions.append(formatted_transaction)
-            
-            # Process modified transactions
-            for transaction in response_dict.get('modified', []):
-                formatted_transaction = self._format_transaction(transaction)
-                formatted_transactions.append(formatted_transaction)
+                request_params = {
+                    'access_token': access_token
+                }
+                
+                if current_cursor:
+                    request_params['cursor'] = current_cursor
+                    
+                request = TransactionsSyncRequest(**request_params)
+                response = self.client.transactions_sync(request)
+                
+                # Log the raw API response for debugging
+                self._log_api_response(f"transactions_sync_page_{pages_fetched}", response, access_token)
+                
+                # Convert response to dict for easier access
+                response_dict = response.to_dict() if hasattr(response, 'to_dict') else response
+                
+                page_added = len(response_dict.get('added', []))
+                page_modified = len(response_dict.get('modified', []))
+                has_more = response_dict.get('has_more', False)
+                next_cursor = response_dict.get('next_cursor', '')
+                
+                print(f"Page {pages_fetched} summary: added={page_added}, modified={page_modified}, has_more={has_more}, next_cursor={next_cursor[:20] if next_cursor else 'empty'}")
+                
+                # Accumulate counters
+                total_added += page_added
+                total_modified += page_modified
+                all_removed.extend(response_dict.get('removed', []))
+                final_cursor = next_cursor
+                
+                # Format and accumulate transactions from this page
+                # Process added transactions
+                for transaction in response_dict.get('added', []):
+                    formatted_transaction = self._format_transaction(transaction)
+                    all_formatted_transactions.append(formatted_transaction)
+                
+                # Process modified transactions
+                for transaction in response_dict.get('modified', []):
+                    formatted_transaction = self._format_transaction(transaction)
+                    all_formatted_transactions.append(formatted_transaction)
+                
+                # Update cursor for next iteration
+                current_cursor = next_cursor
+                
+                # Break if no more pages
+                if not has_more:
+                    print(f"Pagination complete after {pages_fetched} pages")
+                    break
+                
+                # Safety check to prevent infinite loops
+                if pages_fetched > 50:  # Reasonable limit
+                    self.logger.warning(f"Reached maximum page limit ({pages_fetched}) - stopping pagination")
+                    break
             
             result = {
-                'transactions': formatted_transactions,
-                'added': len(response_dict.get('added', [])),
-                'modified': len(response_dict.get('modified', [])),
-                'removed': response_dict.get('removed', []),
-                'next_cursor': response_dict.get('next_cursor', ''),
-                'has_more': response_dict.get('has_more', False)
+                'transactions': all_formatted_transactions,
+                'added': total_added,
+                'modified': total_modified,
+                'removed': all_removed,
+                'next_cursor': final_cursor,
+                'pages_fetched': pages_fetched
             }
             
-            print(f"Returning: transactions={len(result['transactions'])}, has_more={result['has_more']}")
+            print(f"Final result: transactions={len(result['transactions'])}, total_added={total_added}, total_modified={total_modified}, pages_fetched={pages_fetched}")
             return result
             
         except ApiException as e:
-            self.logger.error(f"Plaid API error in transactions_sync: {e}")
+            self.logger.error(f"Plaid API error in transactions_sync (page {pages_fetched}): {e}")
             raise
         except Exception as e:
-            self.logger.error(f"Unexpected error in transactions_sync: {e}")
+            self.logger.error(f"Unexpected error in transactions_sync (page {pages_fetched}): {e}")
             raise
