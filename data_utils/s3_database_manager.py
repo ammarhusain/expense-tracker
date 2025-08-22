@@ -1,5 +1,4 @@
 import boto3
-import tempfile
 import streamlit as st
 import threading
 import os
@@ -60,26 +59,35 @@ class S3DatabaseManager:
             return None
     
     def _download_from_s3(self) -> str:
-        """Download database from S3 to temporary local file"""
+        """Download database from S3 to data directory"""
         try:
-            # Create temp file for S3 database
-            temp_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
-            temp_db.close()  # Close file handle so S3 can write to it
+            # Ensure data directory exists
+            data_dir = "./data"
+            os.makedirs(data_dir, exist_ok=True)
+            
+            # Use a predictable filename in data directory
+            local_db_path = os.path.join(data_dir, "transactions.s3.db")
             
             # Download from S3
-            self.s3_client.download_file(self.bucket, self.db_key, temp_db.name)
-            self.local_db_path = temp_db.name
+            self.s3_client.download_file(self.bucket, self.db_key, local_db_path)
+            self.local_db_path = local_db_path
             # Note: last_sync will be set by caller to avoid caching issues
             
-            return temp_db.name
+            return local_db_path
             
         except self.s3_client.exceptions.NoSuchKey:
             st.warning("⚠️ Database not found in S3. Creating new database.")
-            # Create empty temp file for new database
-            temp_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
-            temp_db.close()
-            self.local_db_path = temp_db.name
-            return temp_db.name
+            # Create empty file in data directory for new database
+            data_dir = "./data"
+            os.makedirs(data_dir, exist_ok=True)
+            local_db_path = os.path.join(data_dir, "transactions.s3.db")
+            
+            # Create empty database file
+            with open(local_db_path, 'w') as f:
+                pass  # Create empty file
+            
+            self.local_db_path = local_db_path
+            return local_db_path
             
         except Exception as e:
             st.error(f"❌ Failed to download from S3: {e}")
@@ -155,7 +163,7 @@ class S3DatabaseManager:
             return False
             
         try:
-            # Remove old temp file if it exists
+            # Remove old file if it exists (now in data directory)
             if self.local_db_path and os.path.exists(self.local_db_path):
                 os.unlink(self.local_db_path)
             

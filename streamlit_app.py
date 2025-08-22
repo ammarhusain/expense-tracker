@@ -15,7 +15,7 @@ from data_utils.s3_database_manager import db_manager
 st.set_page_config(
     page_title="Personal Finance Tracker",
     page_icon="💰",
-    layout="centered",
+    layout="wide",
     initial_sidebar_state="expanded"
 )
 
@@ -456,6 +456,22 @@ with st.expander("💡 Quick Insights", expanded=False):
 
 with st.expander("🏷️ Transaction Management", expanded=True):
     
+    # Display filter statistics
+    total_transactions = len(df) if not df.empty else 0
+    filtered_transactions = len(df_filtered) if not df_filtered.empty else 0
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Transactions", f"{total_transactions:,}")
+    with col2:
+        st.metric("Filtered Transactions", f"{filtered_transactions:,}")
+    with col3:
+        if total_transactions > 0:
+            percentage = (filtered_transactions / total_transactions) * 100
+            st.metric("Showing", f"{percentage:.1f}%")
+        else:
+            st.metric("Showing", "0%")
+    
     df_display = df_filtered
     
     # Checkbox to enable editing mode
@@ -823,7 +839,7 @@ with st.expander("🔧 Account Management", expanded=False):
                 data_source_icon = "🔄" if info.get('data_source') != 'database' else "💾"
                 data_source_text = "fresh data" if info.get('data_source') != 'database' else "cached data"
                 
-                st.markdown(f"####### 🏦 {bank} ({len(info['accounts'])} accounts) {data_source_icon}")
+                st.markdown(f"###### 🏦 {bank} ({len(info['accounts'])} accounts) {data_source_icon}")
                 if info.get('data_source') == 'database':
                     st.caption(f"ℹ️ Showing cached data from database (Plaid API unavailable)")
                 

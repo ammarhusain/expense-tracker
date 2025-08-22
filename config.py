@@ -64,7 +64,7 @@ def create_services(local_db_path: str = "./data/transactions.prod.db"):
     Returns:
         tuple: (transaction_service, data_manager)
     """
-    from s3_database_manager import db_manager
+    from data_utils.s3_database_manager import db_manager
     
     # Try S3 first if configured
     s3_db_path = db_manager.is_s3_enabled()
@@ -72,7 +72,7 @@ def create_services(local_db_path: str = "./data/transactions.prod.db"):
     if s3_db_path:
         # S3 worked, use S3-enabled services
         data_manager = create_data_manager(s3_db_path)
-        from s3_transaction_service import S3TransactionService
+        from data_utils.s3_transaction_service import S3TransactionService
         transaction_service = S3TransactionService(data_manager, db_manager)
         return transaction_service, data_manager
     else:
