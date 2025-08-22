@@ -193,8 +193,6 @@ CATEGORY_DEFINITIONS = {
         "subcategories": {
             "uncategorized": "Catch all category for items that don't fit other categories or you cannot figure out with high confidence where to put it",
             "miscellaneous": "Various small expenses",
-            "maaji_bauji": "Expenses related to father's family",
-            "mummy-g_daddy-g": "Expenses related to mother's family", 
             "loss": "Lost money or theft",
             "reimburse": "Reimbursements received usually as deposits from Venmo or Zelle"
         }
@@ -204,7 +202,6 @@ CATEGORY_DEFINITIONS = {
         "subcategories": {
             "transfer": "Money transfers between own accounts",
             "credit_card_payment": "Credit card bill payments",
-            "to_india": "Money transfers to India usually money sent to Revolut"
         }
     }
 }
