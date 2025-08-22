@@ -122,6 +122,10 @@ def load_transactions(cache_key):
         df['date'] = pd.to_datetime(df['date'])
         df['month'] = df['date'].dt.to_period('M')
         df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+        
+        # Create combined account display column
+        if 'bank_name' in df.columns and 'account_name' in df.columns:
+            df['account_display'] = df['bank_name'].fillna('') + ' ' + df['account_name'].fillna('')
     return df
 
 df = load_transactions(cache_key)
@@ -164,13 +168,13 @@ with st.sidebar:
         df_filtered = df_filtered[df_filtered['ai_category'].isin(categories)]
     
     # Account filter
-    if 'bank_name' in df_filtered.columns:
-        banks = st.multiselect(
-            "Banks",
-            options=sorted(df_filtered['bank_name'].dropna().unique()),
-            default=sorted(df_filtered['bank_name'].dropna().unique())
+    if 'account_display' in df_filtered.columns:
+        accounts = st.multiselect(
+            "Accounts",
+            options=sorted(df_filtered['account_display'].dropna().unique()),
+            default=sorted(df_filtered['account_display'].dropna().unique())
         )
-        df_filtered = df_filtered[df_filtered['bank_name'].isin(banks)]
+        df_filtered = df_filtered[df_filtered['account_display'].isin(accounts)]
     
     # Amount filter
     if not df_filtered.empty:
@@ -188,6 +192,24 @@ with st.sidebar:
     
 # Key metrics and analysis sections collapsed by default 
 with st.expander("📊 Financial Overview", expanded=True):
+    # Display filter statistics
+    total_transactions = len(df) if not df.empty else 0
+    filtered_transactions = len(df_filtered) if not df_filtered.empty else 0
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Transactions", f"{total_transactions:,}")
+    with col2:
+        st.metric("Filtered Transactions", f"{filtered_transactions:,}")
+    with col3:
+        if total_transactions > 0:
+            percentage = (filtered_transactions / total_transactions) * 100
+            st.metric("Showing", f"{percentage:.1f}%")
+        else:
+            st.metric("Showing", "0%")
+    
+    st.divider()
+    
     # Filter out transfer transactions for financial overview metrics
     transfer_categories = CATEGORY_MAPPING.get("transfers", [])
     overview_data = df_filtered[~df_filtered['ai_category'].isin(transfer_categories)].copy()
@@ -456,22 +478,6 @@ with st.expander("💡 Quick Insights", expanded=False):
 
 with st.expander("🏷️ Transaction Management", expanded=True):
     
-    # Display filter statistics
-    total_transactions = len(df) if not df.empty else 0
-    filtered_transactions = len(df_filtered) if not df_filtered.empty else 0
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Total Transactions", f"{total_transactions:,}")
-    with col2:
-        st.metric("Filtered Transactions", f"{filtered_transactions:,}")
-    with col3:
-        if total_transactions > 0:
-            percentage = (filtered_transactions / total_transactions) * 100
-            st.metric("Showing", f"{percentage:.1f}%")
-        else:
-            st.metric("Showing", "0%")
-    
     df_display = df_filtered
     
     # Checkbox to enable editing mode
@@ -483,7 +489,7 @@ with st.expander("🏷️ Transaction Management", expanded=True):
             # Select columns for editing mode
             display_columns = [
                 'date', 'name', 'merchant_name', 'amount', 'ai_category', 'notes', 'tags',
-                'bank_name', 'transaction_id'
+                'account_display', 'transaction_id'
             ]
             
             available_columns = [col for col in display_columns if col in df_display.columns]
@@ -547,9 +553,9 @@ with st.expander("🏷️ Transaction Management", expanded=True):
                         "Tags",
                         help="Add comma-separated tags"
                     ),
-                    "bank_name": st.column_config.TextColumn(
-                        "Bank",
-                        help="Bank name",
+                    "account_display": st.column_config.TextColumn(
+                        "Account",
+                        help="Bank and account name",
                         disabled=True
                     ),
                     "transaction_id": st.column_config.TextColumn(
@@ -606,7 +612,7 @@ with st.expander("🏷️ Transaction Management", expanded=True):
             # Display read-only comprehensive view
             display_columns = [
                 'date', 'authorized_date', 'name', 'merchant_name', 'amount', 'ai_category', 'notes', 'tags',
-                'ai_reason', 'plaid_category', 'bank_name', 'account_owner', 'pending', 'transaction_id'
+                'ai_reason', 'plaid_category', 'account_display', 'account_owner', 'pending', 'transaction_id'
             ]
             
             available_columns = [col for col in display_columns if col in df_display.columns]
@@ -662,9 +668,9 @@ with st.expander("🏷️ Transaction Management", expanded=True):
                         "Merchant",
                         help="Merchant name"
                     ),
-                    "bank_name": st.column_config.TextColumn(
-                        "Bank",
-                        help="Bank name"
+                    "account_display": st.column_config.TextColumn(
+                        "Account",
+                        help="Bank and account name"
                     ),
                     "account_owner": st.column_config.TextColumn(
                         "Account Owner",
