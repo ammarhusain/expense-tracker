@@ -7,7 +7,7 @@ import time
 import os
 
 # NEW: Import new architecture with S3 support
-from config import create_services, CATEGORY_MAPPING
+from config import create_services, get_category_mapping, get_all_subcategories, CATEGORY_DEFINITIONS
 from transaction_types import SyncResult
 from data_utils.s3_database_manager import db_manager
 
@@ -188,6 +188,39 @@ with st.sidebar:
             (df_filtered['amount'] <= max_amount)
         ]
     
+    # Category Reference Section
+    with st.expander("📋 Category Reference", expanded=False):        
+        for parent, data in CATEGORY_DEFINITIONS.items():
+            # Display parent category with description on hover
+            st.markdown(f"##### {parent.title().replace('_', ' ')}")
+            
+            # Create columns for subcategories - 2 per row for better layout
+            subcats = list(data['subcategories'].items())
+            
+            # Process in pairs for 2-column layout
+            for i in range(0, len(subcats), 2):
+                col1, col2 = st.columns(2)
+                
+                # First subcategory
+                with col1:
+                    if i < len(subcats):
+                        subcat, desc = subcats[i]
+                        st.markdown(
+                            f"{subcat}",
+                            help=desc
+                        )
+                
+                # Second subcategory (if exists)
+                with col2:
+                    if i + 1 < len(subcats):
+                        subcat, desc = subcats[i + 1]
+                        st.markdown(
+                            f"{subcat}",
+                            help=desc
+                        )
+            
+            st.markdown("---")
+    
 # Key metrics and analysis sections collapsed by default 
 with st.expander("📊 Financial Overview", expanded=True):
     # Display filter statistics
@@ -209,7 +242,8 @@ with st.expander("📊 Financial Overview", expanded=True):
     st.divider()
     
     # Filter out transfer transactions for financial overview metrics
-    transfer_categories = CATEGORY_MAPPING.get("transfers", [])
+    category_mapping = get_category_mapping()
+    transfer_categories = category_mapping.get("transfers", [])
     overview_data = df_filtered[~df_filtered['ai_category'].isin(transfer_categories)].copy()
     
     # Key metrics row
@@ -262,7 +296,8 @@ with st.expander("📈 Spending Analysis", expanded=True):
     # Combined Income & Expense Multilevel Sunburst
     
     # Filter out transfer transactions from spending analysis
-    transfer_categories = CATEGORY_MAPPING.get("transfers", [])
+    category_mapping = get_category_mapping()
+    transfer_categories = category_mapping.get("transfers", [])
     analysis_data = df_filtered[~df_filtered['ai_category'].isin(transfer_categories)].copy()
     
     # Prepare data for comprehensive sunburst
@@ -286,7 +321,8 @@ with st.expander("📈 Spending Analysis", expanded=True):
         
         # Create reverse mapping from AI category to parent category
         ai_to_parent = {}
-        for parent_cat, ai_categories in CATEGORY_MAPPING.items():
+        category_mapping = get_category_mapping()
+        for parent_cat, ai_categories in category_mapping.items():
             for ai_cat in ai_categories:
                 ai_to_parent[ai_cat] = parent_cat
         
@@ -501,16 +537,15 @@ with st.expander("🏷️ Transaction Management", expanded=True):
                 if col in df_for_editing.columns:
                     df_for_editing[col] = df_for_editing[col].fillna('').astype(str)
             
-            # Get all valid categories from CATEGORY_MAPPING
-            valid_categories = []
-            for category_list in CATEGORY_MAPPING.values():
-                valid_categories.extend(category_list)
+            # Get all valid categories from new category structure
+            all_category_options = get_all_subcategories()
             
             # Also include any existing values from the current dataframe to preserve them
             existing_ai_categories = df_for_editing['ai_category'].dropna().unique().tolist() if 'ai_category' in df_for_editing.columns else []
             
-            # Combine valid categories with existing ones (remove duplicates)
-            all_category_options = list(set(valid_categories + existing_ai_categories))
+            # Combine with existing ones (remove duplicates)
+            all_category_options.extend(existing_ai_categories)
+            all_category_options = list(set(all_category_options))
             all_category_options = [cat for cat in all_category_options if cat and str(cat) != 'nan' and str(cat).strip() != '']
             
             # Display editable dataframe

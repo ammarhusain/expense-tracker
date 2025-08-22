@@ -6,7 +6,7 @@ import pandas as pd
 import anthropic
 from datetime import datetime
 import streamlit as st
-from config import CATEGORY_MAPPING, create_data_manager
+from config import CATEGORY_DEFINITIONS, create_data_manager
 from transaction_types import Transaction
 import time
 
@@ -79,6 +79,21 @@ class TransactionLLMCategorizer:
             self.logger.error(f"Error retrieving transaction {transaction_id}: {str(e)}")
             return None
     
+    def _generate_category_section(self) -> str:
+        """Generate category section for prompt from CATEGORY_DEFINITIONS"""
+        sections = []
+        
+        for parent, data in CATEGORY_DEFINITIONS.items():
+            # Add subcategories with descriptions
+            for subcat, desc in data['subcategories'].items():
+                sections.append(f"**{subcat}**: {desc}")
+            
+            # Add empty line between parent categories for readability
+            sections.append("")
+        
+        # Remove the last empty line
+        return "\n".join(sections[:-1])
+
     def _format_transaction_context(self, transaction: Transaction, potential_transfers: list = None) -> str:
         """Format transaction data into a context string for the LLM with optional transfer context"""
         # Extract key fields with fallbacks
@@ -101,7 +116,10 @@ class TransactionLLMCategorizer:
         plaid_category_str = plaid_category_str.replace("leg_cgr:", "Legacy Category:")
         plaid_category_str = plaid_category_str.replace("leg_det:", "Legacy Detailed Category:")
         
-        # Build the base prompt
+        # Generate dynamic categories section
+        categories_section = self._generate_category_section()
+        
+        # Build the base prompt with dynamic categories
         base_prompt = self.prompt_template.format(
             date=date,
             name=name,
@@ -113,6 +131,9 @@ class TransactionLLMCategorizer:
             payment_details=payment_details,
             plaid_categories=plaid_category_str
         )
+        
+        # Replace categories placeholder with dynamic content
+        base_prompt = base_prompt.replace("{{CATEGORIES}}", categories_section)
         
         # Add transfer detection context if potential matches found
         transfer_context = ""
@@ -173,10 +194,10 @@ class TransactionLLMCategorizer:
                     self.logger.error(f"Missing required fields. Result keys: {list(result.keys())}")
                     raise ValueError("Missing required fields in LLM response")
                 
-                # Create list of all valid categories (values from CATEGORY_MAPPING)
+                # Create list of all valid categories from CATEGORY_DEFINITIONS
                 valid_categories = []
-                for category_list in CATEGORY_MAPPING.values():
-                    valid_categories.extend(category_list)
+                for category_data in CATEGORY_DEFINITIONS.values():
+                    valid_categories.extend(category_data['subcategories'].keys())
                 
                 # Validate category is in our mapping - must match exactly
                 if result['category'] not in valid_categories:

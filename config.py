@@ -84,18 +84,156 @@ def create_services(local_db_path: str = "./data/transactions.prod.db"):
         
         return transaction_service, data_manager
 
-CATEGORY_MAPPING = {
-  "income": ["paychecks", "interest_income", "business_income", "investment income"],
-  "benevolence": ["charity", "gifts"],
-  "transportation": ["auto_payment", "public_transit", "gas", "auto_maintenance", "parking_or_tolls", "taxi_or_ride_shares"],
-  "housing": ["mortgage", "rent", "furniture", "home_maintenance", "remodel"],
-  "utilities": ["garbage", "water", "gas_and_electric", "internet", "phone", "software_subscriptions"],
-  "food": ["groceries", "restaurants_or_bars", "coffee_shops"],
-  "travel": ["travel_general", "airfare", "accommodation"],
-  "shopping": ["shopping", "clothing", "housewares", "electronics"],
-  "lifestyle": ["personal_grooming", "hobbies", "education", "entertainment_or_recreation"],
-  "health_wellness": ["medical", "dental", "fitness"],
-  "financial": ["loan_repayment", "financial_legal_services", "atm_cash_withdrawal", "insurance", "taxes", "penalties", "hand_loans", "invest"],
-  "other": ["uncategorized", "miscellaneous", "maaji_bauji", "mummy-g_daddy-g", "loss", "reimburse"],
-  "transfers": ["transfer", "credit_card_payment", "to_india"]
+CATEGORY_DEFINITIONS = {
+    "income": {
+        "description": "Money received from various sources",
+        "subcategories": {
+            "paychecks": "Regular salary payments from employers",
+            "interest_income": "Interest earned from bank accounts, CDs, bonds",
+            "business_income": "Revenue from business activities or freelance work",
+            "investment_income": "Dividends, capital gains, investment returns"
+        }
+    },
+    "benevolence": {
+        "description": "Money given to others",
+        "subcategories": {
+            "charity": "Donations to charitable organizations",
+            "gifts": "Money given to family, friends, or others"
+        }
+    },
+    "transportation": {
+        "description": "Vehicle and travel-related expenses",
+        "subcategories": {
+            "auto_payment": "Car loan or lease payments",
+            "public_transit": "Bus, train, subway fares",
+            "gas": "Gasoline for vehicles",
+            "auto_maintenance": "Car repairs, oil changes, maintenance",
+            "parking_or_tolls": "Parking fees, toll road charges",
+            "taxi_or_ride_shares": "Uber, Lyft, taxi services"
+        }
+    },
+    "housing": {
+        "description": "Home and housing-related expenses",
+        "subcategories": {
+            "mortgage": "Monthly mortgage payments",
+            "rent": "Monthly rental payments",
+            "furniture": "Furniture purchases for home",
+            "home_maintenance": "Home repairs, maintenance services",
+            "remodel": "Home renovation, remodeling expenses"
+        }
+    },
+    "utilities": {
+        "description": "Essential home services and subscriptions",
+        "subcategories": {
+            "garbage": "Waste management services",
+            "water": "Water utility bills",
+            "gas_and_electric": "Gas and electric utility bills",
+            "internet": "Internet service provider bills",
+            "phone": "Mobile or landline phone bills",
+            "software_subscriptions": "Software, streaming, app subscriptions"
+        }
+    },
+    "food": {
+        "description": "Food and dining expenses",
+        "subcategories": {
+            "groceries": "Food shopping at grocery stores",
+            "restaurants_or_bars": "Dining out, bars, takeout",
+            "coffee_shops": "Coffee shops, cafes"
+        }
+    },
+    "travel": {
+        "description": "Travel and vacation expenses",
+        "subcategories": {
+            "travel_general": "General travel expenses",
+            "airfare": "Flight tickets",
+            "accommodation": "Hotels, lodging"
+        }
+    },
+    "shopping": {
+        "description": "Retail purchases and consumer goods",
+        "subcategories": {
+            "shopping": "General retail purchases",
+            "clothing": "Apparel, shoes, accessories",
+            "housewares": "Household items, home goods",
+            "electronics": "Electronics, gadgets, tech purchases"
+        }
+    },
+    "lifestyle": {
+        "description": "Personal development and entertainment",
+        "subcategories": {
+            "personal_grooming": "Haircuts, beauty services, cosmetics",
+            "hobbies": "Hobby supplies, craft materials",
+            "education": "Educational expenses, courses, books",
+            "entertainment_or_recreation": "Movies, concerts, recreational activities"
+        }
+    },
+    "health_wellness": {
+        "description": "Health and fitness related expenses",
+        "subcategories": {
+            "medical": "Doctor visits, medical expenses",
+            "dental": "Dental care expenses",
+            "fitness": "Gym memberships, fitness services"
+        }
+    },
+    "financial": {
+        "description": "Financial services and obligations",
+        "subcategories": {
+            "loan_repayment": "Loan payments (non-auto, non-mortgage)",
+            "financial_legal_services": "Banking fees, legal services",
+            "atm_cash_withdrawal": "ATM cash withdrawals",
+            "insurance": "Insurance premiums for cars and home",
+            "taxes": "Tax payments to IRS or property taxes",
+            "penalties": "Late fees, penalties",
+            "hand_loans": "Personal loans to/from individuals",
+            "invest": "Investment purchases and usually transfers into brokerage accounts"
+        }
+    },
+    "other": {
+        "description": "Miscellaneous and uncategorized expenses",
+        "subcategories": {
+            "uncategorized": "Catch all category for items that don't fit other categories or you cannot figure out with high confidence where to put it",
+            "miscellaneous": "Various small expenses",
+            "maaji_bauji": "Expenses related to father's family",
+            "mummy-g_daddy-g": "Expenses related to mother's family", 
+            "loss": "Lost money or theft",
+            "reimburse": "Reimbursements received usually as deposits from Venmo or Zelle"
+        }
+    },
+    "transfers": {
+        "description": "Money transfers and account movements",
+        "subcategories": {
+            "transfer": "Money transfers between own accounts",
+            "credit_card_payment": "Credit card bill payments",
+            "to_india": "Money transfers to India usually money sent to Revolut"
+        }
+    }
 }
+
+# Helper functions to work with the new structure
+def get_category_mapping() -> Dict[str, List[str]]:
+    """Generate category mapping for existing code compatibility"""
+    return {
+        parent: list(data['subcategories'].keys())
+        for parent, data in CATEGORY_DEFINITIONS.items()
+    }
+
+def get_all_subcategories() -> List[str]:
+    """Get flat list of all subcategories"""
+    subcats = []
+    for data in CATEGORY_DEFINITIONS.values():
+        subcats.extend(data['subcategories'].keys())
+    return subcats
+
+def get_category_description(subcategory: str) -> str:
+    """Get description for a specific subcategory"""
+    for data in CATEGORY_DEFINITIONS.values():
+        if subcategory in data['subcategories']:
+            return data['subcategories'][subcategory]
+    return "Unknown category"
+
+def get_parent_category(subcategory: str) -> str:
+    """Get parent category for a subcategory"""
+    for parent, data in CATEGORY_DEFINITIONS.items():
+        if subcategory in data['subcategories']:
+            return parent
+    return "other"
