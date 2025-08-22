@@ -5,7 +5,7 @@ from typing import Dict, Optional
 import pandas as pd
 import anthropic
 from datetime import datetime
-from data_utils.data_manager import DataManager
+import streamlit as st
 from config import CATEGORY_MAPPING, create_data_manager
 from transaction_types import Transaction
 import time
@@ -13,9 +13,21 @@ import time
 class TransactionLLMCategorizer:
     def __init__(self, api_key: str = None):
         """Initialize the LLM categorizer with Claude API client"""
-        self.api_key = api_key or os.getenv('ANTHROPIC_API_KEY')
+        # Try to get API key from multiple sources
+        if api_key:
+            self.api_key = api_key
+        elif hasattr(st, 'secrets') and "anthropic" in st.secrets and "api_key" in st.secrets["anthropic"]:
+            self.api_key = st.secrets["anthropic"]["api_key"]
+        else:
+            # Fallback to environment variable
+            self.api_key = os.getenv('ANTHROPIC_API_KEY')
+        
         if not self.api_key:
-            raise ValueError("Anthropic API key not found. Set ANTHROPIC_API_KEY environment variable.")
+            raise ValueError(
+                "Anthropic API key not found. "
+                "Please add it to Streamlit secrets under [anthropic] api_key "
+                "or set ANTHROPIC_API_KEY environment variable."
+            )
         
         self.client = anthropic.Anthropic(api_key=self.api_key)
         self.data_manager = create_data_manager()  # Use factory pattern

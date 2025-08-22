@@ -7,7 +7,8 @@
       "WebFetch(domain:www.chase.com)",
       "WebFetch(domain:developer.jpmorgan.com)",
       "WebFetch(domain:www.jpmorgan.com)",
-      "WebFetch(domain:developer.payments.jpmorgan.com)"
+      "WebFetch(domain:developer.payments.jpmorgan.com)",
+      "Bash(find:*)"
     ],
     "deny": []
   }

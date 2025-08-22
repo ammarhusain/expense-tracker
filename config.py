@@ -13,7 +13,7 @@ class Config:
     plaid_env: str = os.getenv("PLAID_ENV", "sandbox")
     
     # Data storage configuration - single path, format determined by extension
-    data_path: str = os.getenv("DATA_PATH", "./data/transactions.csv")  # .csv = CSV, .db = SQLite
+    data_path: str = os.getenv("DATA_PATH", "./data/transactions.db")  # .db = SQLite
         
     # SQLite configuration
     sqlite_timeout: float = float(os.getenv("SQLITE_TIMEOUT", "60.0"))
