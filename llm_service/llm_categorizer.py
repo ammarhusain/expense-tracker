@@ -103,6 +103,7 @@ class TransactionLLMCategorizer:
         )
         
         # Add transfer detection context if potential matches found
+        transfer_context = ""
         if potential_transfers:
             transfer_context += "Potential matching transactions:\n"
             for i, match in enumerate(potential_transfers[:3], 1):  # Show up to 3 matches
@@ -129,11 +130,8 @@ class TransactionLLMCategorizer:
             
             transfer_context += "If this appears to be a transfer between your own accounts, categorize it as 'transfer'."
             transfer_context += "Consider the timing, amounts, and whether the accounts belong to the same person/institution.\n"
-            
-            # Append transfer context to the base prompt
-            return base_prompt + transfer_context
-        
-        return base_prompt
+                    
+        return base_prompt + transfer_context
     
     def _parse_llm_response(self, response_text: str) -> Dict:
         """Parse LLM JSON response and validate format"""
