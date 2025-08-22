@@ -28,16 +28,14 @@ if 'initialized' not in st.session_state:
 selected_db_path = None  # Initialize variable
 
 with st.sidebar.expander("🗄️ Database Status", expanded=True):
-    if db_manager.is_s3_enabled():
-        st.info("☁️ Using AWS S3 database")
-        
+    if db_manager.is_s3_enabled():        
         # Sync status
         sync_status = db_manager.get_sync_status()
         if sync_status["last_sync"]:
             sync_time = sync_status["last_sync"].strftime('%H:%M:%S')
-            st.success(f"Last sync: {sync_time}")
+            st.success(f"☁️ Using AWS S3: synced @ {sync_time}")
         else:
-            st.warning("Not synced yet")
+            st.warning("☁️ Using AWS S3: Not synced yet")
         
         # Sync controls
         col1, col2 = st.columns(2)
@@ -783,19 +781,18 @@ with st.expander("🔧 Account Management", expanded=False):
             if 'accounts' in accounts[bank_name]:
                 account_options.append(bank_name)
     
-    # Account selection dropdown
-    selected_account = st.selectbox(
-        "Select Account to Sync",
-        options=account_options,
-        index=0,
-        help="Choose which account to sync, or 'All Accounts' to sync everything",
-        key="account_selector"
-    )
-    
     # Sync options
-    col1, col2 = st.columns(2)
-    
+    col1, col2, col3 = st.columns(3, vertical_alignment="bottom")
     with col1:
+        # Account selection dropdown
+        selected_account = st.selectbox(
+            "Select Account to Sync",
+            options=account_options,
+            index=0,
+            help="Choose which account to sync, or 'All Accounts' to sync everything",
+            key="account_selector"
+        )
+    with col2:
         if st.button("🔄 Incremental Sync", type="primary", help="Fetch only new transactions since last sync"):
             with st.spinner(f"Syncing new transactions for {selected_account}..."):
                 if selected_account == "All Accounts":
@@ -814,7 +811,7 @@ with st.expander("🔧 Account Management", expanded=False):
                     for error in result.errors:
                         st.error(f"  - {error}")
     
-    with col2:
+    with col3:
         if st.button("🔄 Full Sync", type="secondary", help="Re-fetch all historical transactions"):
             with st.spinner(f"Performing full sync for {selected_account}..."):
                 if selected_account == "All Accounts":
@@ -907,30 +904,18 @@ with st.expander("🔧 Account Management", expanded=False):
         
         # Add link to Account Linking page
         st.info("💡 Use the Link New Account section below to connect your bank accounts.")
-
-# Link New Account Section
-with st.expander("🔗 Link New Account", expanded=False):
+    
+    # Use simple link token generation and HTML file approach (known to work)
     from plaid_client import PlaidClient
     plaid_client = PlaidClient()
     
-    # Use simple link token generation and HTML file approach (known to work)
-    st.markdown("""
-    **Link Your Bank Account:**
-    
-    This will create a link token and generate an HTML file for you to use with Plaid Link.
-    """)
-    
-    if st.button("🔗 Get Link Token & HTML", type="primary"):
-        try:
-            with st.spinner("Creating link token..."):
-                # Create simple link token
-                link_token = plaid_client.create_link_token("user_1")
-                st.session_state['link_token'] = link_token
-                
-            st.success("✅ Link token created!")
-            
-            # Create simple HTML content
-            html_content = f"""<!DOCTYPE html>
+    # Generate link token and HTML content
+    try:
+        # Create simple link token
+        link_token = plaid_client.create_link_token("user_1")
+        
+        # Create simple HTML content
+        html_content = f"""<!DOCTYPE html>
 <html>
 <head>
     <title>Plaid Link</title>
@@ -971,26 +956,31 @@ with st.expander("🔗 Link New Account", expanded=False):
     </script>
 </body>
 </html>"""
-            
+
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("""
+        **Link A New Bank Account:**
+        """)  
+        with col2:
             # Offer download
             st.download_button(
-                label="📄 Download Plaid Link HTML",
+                label="📄 Download Plaid HTML",
                 data=html_content,
                 file_name="plaid_link.html",
                 mime="text/html",
-                help="Download and open this file in your browser"
+                help="Download and open this file in your browser to connect a new account",
+                type="primary",
+                key="download_plaid_html_main"
             )
             
-            st.info("💡 **Instructions:** Download the HTML file, open it in your browser, connect your account, then copy the tokens back here.")
-            
-        except Exception as e:
-            st.error(f"Error creating link token: {str(e)}")
+        st.info("💡 **Instructions:** Download the HTML file, open it in your browser, connect your account, then copy the tokens back here.")
+        
+    except Exception as e:
+        st.error(f"Error creating link token: {str(e)}")
     
-    # Manual token entry fallback
-    st.markdown("---")
-    st.subheader("📝 Manual Token Entry")
-    st.caption("Use this if the automatic link doesn't work or to paste tokens from the link above")
-    
+        
     with st.form("manual_token_entry"):
         col1, col2 = st.columns(2)
         with col1:
@@ -1007,7 +997,6 @@ with st.expander("🔗 Link New Account", expanded=False):
             )
         
         manual_submitted = st.form_submit_button("💾 Save Connected Account", type="secondary")
-        
         if manual_submitted:
             if not manual_public_token or not manual_institution_name:
                 st.error("Please provide both public token and institution name")
