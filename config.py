@@ -35,6 +35,55 @@ def create_data_manager(data_path: str = None):
     from data_utils.sqlite_data_manager import SqliteDataManager
     return SqliteDataManager(path)
 
+# Factory pattern for TransactionService with S3 support
+def create_transaction_service(data_manager):
+    """
+    Smart factory that creates the appropriate TransactionService type.
+    
+    Returns:
+        - S3TransactionService if S3 is enabled (has AWS secrets)
+        - TransactionService if running locally without S3
+    """
+    from data_utils.s3_database_manager import db_manager
+    
+    if db_manager.is_s3_enabled():
+        from data_utils.s3_transaction_service import S3TransactionService
+        return S3TransactionService(data_manager, db_manager)
+    else:
+        from transaction_service import TransactionService
+        return TransactionService(data_manager)
+
+def create_services(local_db_path: str = "./data/transactions.prod.db"):
+    """
+    Factory function to create both data manager and transaction service.
+    Handles the complete service initialization with S3 support and fallback.
+    
+    Args:
+        local_db_path: Path to local database file for fallback mode
+    
+    Returns:
+        tuple: (transaction_service, data_manager)
+    """
+    from s3_database_manager import db_manager
+    
+    # Try S3 first if configured
+    s3_db_path = db_manager.is_s3_enabled()
+    
+    if s3_db_path:
+        # S3 worked, use S3-enabled services
+        data_manager = create_data_manager(s3_db_path)
+        from s3_transaction_service import S3TransactionService
+        transaction_service = S3TransactionService(data_manager, db_manager)
+        return transaction_service, data_manager
+    else:
+        # S3 failed or not configured, use local fallback
+        data_manager = create_data_manager(local_db_path)
+        
+        from transaction_service import TransactionService
+        transaction_service = TransactionService(data_manager)
+        
+        return transaction_service, data_manager
+
 CATEGORY_MAPPING = {
   "income": ["paychecks", "interest_income", "business_income", "investment income"],
   "benevolence": ["charity", "gifts"],
@@ -50,5 +99,3 @@ CATEGORY_MAPPING = {
   "other": ["uncategorized", "miscellaneous", "maaji_bauji", "mummy-g_daddy-g", "loss", "reimburse"],
   "transfers": ["transfer", "credit_card_payment", "to_india"]
 }
-
-    

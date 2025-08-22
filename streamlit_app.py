@@ -4,12 +4,12 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import numpy as np
 import time
+import os
 
-# NEW: Import new architecture
-from config import create_data_manager
-from transaction_service import TransactionService
-from transaction_types import TransactionFilters, SyncResult
-from config import CATEGORY_MAPPING
+# NEW: Import new architecture with S3 support
+from config import create_services, CATEGORY_MAPPING
+from transaction_types import SyncResult
+from data_utils.s3_database_manager import db_manager
 
 # Page config
 st.set_page_config(
@@ -24,43 +24,71 @@ if 'initialized' not in st.session_state:
     st.session_state.clear()
     st.session_state.initialized = True
 
-# Database Selection
-with st.sidebar.expander("🗄️ Database Selection", expanded=True):
-    # Get available .db files in data directory
-    import glob
-    import os
-    data_dir = "./data"
-    db_files = glob.glob(os.path.join(data_dir, "*.db"))
-    
-    if db_files:
-        # Extract just the filename for display
-        db_options = [os.path.basename(db_file) for db_file in db_files]
+# Database Status - S3 or Local
+selected_db_path = None  # Initialize variable
+
+with st.sidebar.expander("🗄️ Database Status", expanded=True):
+    if db_manager.is_s3_enabled():
+        st.info("☁️ Using AWS S3 database")
+        
+        # Sync status
+        sync_status = db_manager.get_sync_status()
+        if sync_status["last_sync"]:
+            sync_time = sync_status["last_sync"].strftime('%H:%M:%S')
+            st.success(f"Last sync: {sync_time}")
+        else:
+            st.warning("Not synced yet")
+        
+        # Sync controls
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("☁️ Save to S3"):
+                if db_manager.upload_to_s3():
+                    st.success("✅ Synced!")
+                    st.rerun()
+        
+        with col2:
+            if st.button("📥 Load from S3"):
+                # Clear cache and reload
+                st.cache_resource.clear()
+                st.rerun()
+                
+        # Show file info
+        st.caption(f"📁 S3: s3://{sync_status['bucket']}/{sync_status['db_key']}")
     else:
-        st.error("No .db files found in data directory. Please create a database first.")
-        st.stop()
-    
-    # Default selection
-    default_db = "transactions.prod.db" if "transactions.prod.db" in db_options else (db_options[0] if db_options else "transactions.sbox.db")
-    
-    selected_db = st.selectbox(
-        "Select Database",
-        options=db_options,
-        index=db_options.index(default_db) if default_db in db_options else 0,
-        help="Choose which database file to load"
-    )
-    
-    # Show selected database path
-    selected_db_path = os.path.join(data_dir, selected_db)
-    st.caption(f"📁 Using: {selected_db_path}")
+        st.info("🏠 Using local database")
+        # Get available .db files in data directory for local mode
+        import glob
+        import os
+        data_dir = "./data"
+        db_files = glob.glob(os.path.join(data_dir, "*.db"))
+        
+        if db_files:
+            # Extract just the filename for display
+            db_options = [os.path.basename(db_file) for db_file in db_files]
+            default_db = "transactions.prod.db" if "transactions.prod.db" in db_options else (db_options[0] if db_options else "transactions.sbox.db")
+            
+            selected_db = st.selectbox(
+                "Select Database",
+                options=db_options,
+                index=db_options.index(default_db) if default_db in db_options else 0,
+                help="Choose which database file to load"
+            )
+            
+            selected_db_path = os.path.join(data_dir, selected_db)
+            st.caption(f"📁 Local: {selected_db_path}")
+        else:
+            st.caption("📁 Local: ./data/transactions.prod.db")
 
-# Initialize services with selected database
+# Initialize services with S3 support and selected database path
 @st.cache_resource
-def get_services(db_path):
-    """Initialize services with specified database path."""
-    data_manager = create_data_manager(db_path)
-    return TransactionService(data_manager), data_manager
+def get_services(local_path, cache_key):
+    """Initialize services with S3-aware database management."""
+    return create_services(local_path)
 
-transaction_service, data_manager = get_services(selected_db_path)
+# Create a cache key that changes when database selection changes
+cache_key = f"services_{selected_db_path}"
+transaction_service, data_manager = get_services(selected_db_path, cache_key)
 
 # Database info
 with st.sidebar.expander("📊 Database Info", expanded=False):
@@ -74,8 +102,10 @@ with st.sidebar.expander("📊 Database Info", expanded=False):
             st.caption(f"📅 {date_range[0].strftime('%Y-%m-%d')} to {date_range[1].strftime('%Y-%m-%d')}")
         
         # File size
-        file_size = os.path.getsize(selected_db_path) / (1024 * 1024)  # MB
-        st.caption(f"💾 Size: {file_size:.1f} MB")
+        sync_status = db_manager.get_sync_status()
+        if sync_status["local_path"] and os.path.exists(sync_status["local_path"]):
+            file_size = os.path.getsize(sync_status["local_path"]) / (1024 * 1024)  # MB
+            st.caption(f"💾 Size: {file_size:.1f} MB")
         
     except Exception as e:
         st.error(f"Error reading database: {str(e)}")
@@ -85,20 +115,16 @@ st.header('💰 Personal Finance Tracker')
 
 # Load transaction data using new service
 @st.cache_data
-def load_transactions(db_path):
-    """Load transactions using the service layer with specific database."""
-    # Get fresh services for this database
-    temp_data_manager = create_data_manager(db_path)
-    temp_service = TransactionService(temp_data_manager)
-    
-    df = temp_service.get_transactions()
+def load_transactions(cache_key):
+    """Load transactions using the service layer."""
+    df = transaction_service.get_transactions()
     if not df.empty and 'date' in df.columns:
         df['date'] = pd.to_datetime(df['date'])
         df['month'] = df['date'].dt.to_period('M')
         df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
     return df
 
-df = load_transactions(selected_db_path)
+df = load_transactions(cache_key)
 
 if df.empty:
     st.warning("No transactions found. Please sync your accounts or check your data files.")
@@ -546,9 +572,12 @@ with st.expander("🏷️ Transaction Management", expanded=True):
                                 updates[transaction_id] = row_updates
                                 changes_made += 1
                     
-                    # Use data manager for bulk update
+                    # Use transaction service for bulk update (supports S3 sync)
                     if updates:
-                        updated_count = data_manager.bulk_update(updates)
+                        if hasattr(transaction_service, 'bulk_update_transactions'):
+                            updated_count = transaction_service.bulk_update_transactions(updates)
+                        else:
+                            updated_count = data_manager.bulk_update(updates)
                         st.success(f"✅ Successfully saved changes to {updated_count} transactions!")
                         st.cache_data.clear()  # Clear cache to refresh data
                         st.rerun()  # Refresh the app to show updated data
