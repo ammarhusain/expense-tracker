@@ -119,8 +119,11 @@ class TransactionLLMCategorizer:
         # Generate dynamic categories section
         categories_section = self._generate_category_section()
         
-        # Build the base prompt with dynamic categories
-        base_prompt = self.prompt_template.format(
+        # Replace categories placeholder first, then format the rest
+        prompt_with_categories = self.prompt_template.replace("{{CATEGORIES}}", categories_section)
+        
+        # Build the base prompt with all placeholders filled
+        base_prompt = prompt_with_categories.format(
             date=date,
             name=name,
             original_description=original_description,
@@ -131,9 +134,6 @@ class TransactionLLMCategorizer:
             payment_details=payment_details,
             plaid_categories=plaid_category_str
         )
-        
-        # Replace categories placeholder with dynamic content
-        base_prompt = base_prompt.replace("{{CATEGORIES}}", categories_section)
         
         # Add transfer detection context if potential matches found
         transfer_context = ""
@@ -229,7 +229,7 @@ class TransactionLLMCategorizer:
         """
         # Format context for LLM
         prompt = self._format_transaction_context(transaction, potential_transfers)
-        # print(f"prompt {prompt}")
+        # print(f"prompt ***\n{prompt}\n****\n")
         time.sleep(1.0)
         # Call Claude API
         message = self.client.messages.create(
