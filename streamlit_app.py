@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import numpy as np
 import time
@@ -25,6 +26,45 @@ def validate_prompt_template(prompt: str) -> bool:
     """Validate that prompt contains required placeholders"""
     required_placeholders = ['{{CATEGORIES}}', '{date}', '{name}', '{amount}']
     return all(placeholder in prompt for placeholder in required_placeholders)
+
+@st.dialog("📋 Category Reference", width="large")
+def category_reference_modal():
+    """Read-only modal showing all available categories and their descriptions"""
+    st.markdown("**Available spending categories with descriptions:**")
+    st.caption("This reference shows all categories used by the AI categorization system.")
+    
+    for parent, data in CATEGORY_DEFINITIONS.items():
+        # Display parent category with description on hover
+        st.markdown(f"##### {parent.title().replace('_', ' ')}")
+        
+        # Create columns for subcategories - 2 per row for better layout
+        subcats = list(data['subcategories'].items())
+        
+        # Process in pairs for 2-column layout
+        for i in range(0, len(subcats), 2):
+            col1, col2 = st.columns(2)
+            
+            # First subcategory
+            with col1:
+                if i < len(subcats):
+                    subcat, desc = subcats[i]
+                    st.markdown(
+                        f"**{subcat}**"
+                        # help=desc
+                    )
+                    st.caption(desc)
+            
+            # Second subcategory (if exists)
+            with col2:
+                if i + 1 < len(subcats):
+                    subcat, desc = subcats[i + 1]
+                    st.markdown(
+                        f"**{subcat}**"
+                        # help=desc
+                    )
+                    st.caption(desc)
+        
+        st.markdown("---")
 
 @st.dialog("🎯 Customize Categorization Prompt")
 def prompt_editor():
@@ -280,39 +320,6 @@ with st.sidebar:
             (df_filtered['amount'] <= max_amount)
         ]
     
-    # Category Reference Section
-    with st.expander("📋 Category Reference", expanded=False):        
-        for parent, data in CATEGORY_DEFINITIONS.items():
-            # Display parent category with description on hover
-            st.markdown(f"##### {parent.title().replace('_', ' ')}")
-            
-            # Create columns for subcategories - 2 per row for better layout
-            subcats = list(data['subcategories'].items())
-            
-            # Process in pairs for 2-column layout
-            for i in range(0, len(subcats), 2):
-                col1, col2 = st.columns(2)
-                
-                # First subcategory
-                with col1:
-                    if i < len(subcats):
-                        subcat, desc = subcats[i]
-                        st.markdown(
-                            f"{subcat}",
-                            help=desc
-                        )
-                
-                # Second subcategory (if exists)
-                with col2:
-                    if i + 1 < len(subcats):
-                        subcat, desc = subcats[i + 1]
-                        st.markdown(
-                            f"{subcat}",
-                            help=desc
-                        )
-            
-            st.markdown("---")
-    
 # Key metrics and analysis sections collapsed by default 
 with st.expander("📊 Financial Overview", expanded=True):
     # Display filter statistics
@@ -385,6 +392,14 @@ with st.expander("📊 Financial Overview", expanded=True):
         )
 
 with st.expander("📈 Spending Analysis", expanded=True):
+    # Add Category Reference button at the top
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.write("")  # Spacing
+    with col2:
+        if st.button("📋 Category Reference", help="View all available spending categories and their descriptions"):
+            category_reference_modal()
+    
     # Combined Income & Expense Multilevel Sunburst
     
     # Filter out transfer transactions from spending analysis
@@ -513,7 +528,7 @@ with st.expander("📈 Spending Analysis", expanded=True):
     else:
         st.info("No transaction data available for visualization")
     
-    # Monthly income vs expense histogram       
+    # Monthly income vs expense line charts       
     # Prepare monthly data for both income and expenses (excluding transfers)
     if not analysis_data.empty and 'month' in analysis_data.columns:
         monthly_income = analysis_data[analysis_data['amount'] < 0].groupby('month')['amount'].sum().abs()
@@ -523,59 +538,63 @@ with st.expander("📈 Spending Analysis", expanded=True):
         monthly_expenses = pd.Series(dtype=float)
     
     if not monthly_income.empty or not monthly_expenses.empty:
-        # Create combined dataframe for histogram
+        # Get all months and create complete series for both income and expenses
         all_months = set()
         if not monthly_income.empty:
             all_months.update(monthly_income.index)
         if not monthly_expenses.empty:
             all_months.update(monthly_expenses.index)
         
-        histogram_data = []
-        for month in sorted(all_months):
-            month_str = str(month)
-            
-            # Add income bar
-            income_amount = monthly_income.get(month, 0)
-            if income_amount > 0:
-                histogram_data.append({
-                    'month': month_str,
-                    'amount': income_amount,
-                    'type': 'Income'
-                })
-            
-            # Add expense bar
-            expense_amount = monthly_expenses.get(month, 0)
-            if expense_amount > 0:
-                histogram_data.append({
-                    'month': month_str,
-                    'amount': expense_amount,
-                    'type': 'Expenses'
-                })
+        # Create separate dataframes for income and expenses with all months
+        months_sorted = sorted(all_months)
+        months_str = [str(month) for month in months_sorted]
         
-        if histogram_data:
-            histogram_df = pd.DataFrame(histogram_data)
-            
-            fig_histogram = px.bar(
-                histogram_df,
-                x='month',
-                y='amount',
-                color='type',
-                title="Monthly Income vs Expenses",
-                barmode='group',
-                color_discrete_map={
-                    'Income': '#2E8B57',  # Sea green
-                    'Expenses': '#DC143C'  # Crimson
-                }
+        # Prepare data for line chart
+        income_values = [monthly_income.get(month, 0) for month in months_sorted]
+        expense_values = [monthly_expenses.get(month, 0) for month in months_sorted]
+        
+        # Create line chart with circular markers
+        fig_lines = go.Figure()
+        
+        # Add income line
+        fig_lines.add_trace(go.Scatter(
+            x=months_str,
+            y=income_values,
+            mode='lines+markers',
+            name='Income',
+            line=dict(color='#2E8B57', width=3),  # Sea green
+            marker=dict(size=10, symbol='circle'),
+            hovertemplate='<b>Income</b><br>Month: %{x}<br>Amount: $%{y:,.0f}<extra></extra>'
+        ))
+        
+        # Add expenses line
+        fig_lines.add_trace(go.Scatter(
+            x=months_str,
+            y=expense_values,
+            mode='lines+markers',
+            name='Expenses',
+            line=dict(color='#DC143C', width=3),  # Crimson
+            marker=dict(size=10, symbol='circle'),
+            hovertemplate='<b>Expenses</b><br>Month: %{x}<br>Amount: $%{y:,.0f}<extra></extra>'
+        ))
+        
+        fig_lines.update_layout(
+            title="Monthly Income vs Expenses",
+            height=400,
+            xaxis_title="Month",
+            yaxis_title="Amount ($)",
+            yaxis_tickformat="$,.0f",
+            hovermode='x unified',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
             )
-            fig_histogram.update_layout(
-                height=400,
-                xaxis_title="Month",
-                yaxis_title="Amount ($)",
-                yaxis_tickformat="$,.0f"
-            )
-            st.plotly_chart(fig_histogram, use_container_width=True)
-        else:
-            st.info("No monthly data available")
+        )
+        
+        st.plotly_chart(fig_lines, use_container_width=True)
     else:
         st.info("No monthly data available")
 
