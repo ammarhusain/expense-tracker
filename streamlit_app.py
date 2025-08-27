@@ -902,6 +902,188 @@ with st.expander("🏷️ Transaction Management", expanded=True):
                 
         except Exception as e:
             st.error(f"❌ Error in bulk categorization: {str(e)}")
+
+# Database Query Interface
+with st.expander("🔍 Database Query Interface", expanded=False):
+    st.markdown("**Execute read-only SQL queries directly on the database**")
+    st.caption("⚠️ Only SELECT queries are allowed. All queries are read-only for safety.")
+    
+    # Sample queries dropdown
+    sample_queries = {
+        "Select a sample query below": "",        
+        "Total transactions by month": """SELECT 
+    substr(date, 1, 7) as month,
+    COUNT(*) as transaction_count,
+    SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as total_spending,
+    SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as total_income
+FROM transactions 
+GROUP BY substr(date, 1, 7) 
+ORDER BY month DESC
+LIMIT 12;""",
+        "Top spending categories": """SELECT 
+    COALESCE(ai_category, 'Uncategorized') as category,
+    COUNT(*) as transaction_count,
+    SUM(amount) as total_spent,
+    AVG(amount) as avg_amount
+FROM transactions 
+WHERE amount > 0
+GROUP BY COALESCE(ai_category, 'Uncategorized')
+ORDER BY total_spent DESC
+LIMIT 10;""",
+        "Account balances and activity": """SELECT 
+    a.bank_name,
+    a.account_name,
+    a.balance_current,
+    COUNT(t.transaction_id) as transaction_count,
+    MIN(t.date) as first_transaction,
+    MAX(t.date) as last_transaction
+FROM accounts a
+LEFT JOIN transactions t ON a.id = t.account_id
+GROUP BY a.id, a.bank_name, a.account_name, a.balance_current
+ORDER BY a.bank_name, a.account_name;""",
+        "Recent large transactions": """SELECT 
+    t.date,
+    t.name,
+    t.merchant_name,
+    t.amount,
+    t.ai_category,
+    a.bank_name,
+    a.account_name
+FROM transactions t
+JOIN accounts a ON t.account_id = a.id
+WHERE ABS(t.amount) > 100
+ORDER BY t.date DESC, ABS(t.amount) DESC
+LIMIT 20;""",
+        "Pending transactions": """SELECT 
+    t.date,
+    t.name,
+    t.amount,
+    t.ai_category,
+    a.bank_name,
+    a.account_name
+FROM transactions t
+JOIN accounts a ON t.account_id = a.id
+WHERE t.pending = 1
+ORDER BY t.date DESC;""",
+        "Monthly spending trends by category": """SELECT 
+    substr(t.date, 1, 7) as month,
+    COALESCE(t.ai_category, 'Uncategorized') as category,
+    SUM(t.amount) as total_spent,
+    COUNT(*) as transaction_count
+FROM transactions t
+WHERE t.amount > 0
+GROUP BY substr(t.date, 1, 7), COALESCE(t.ai_category, 'Uncategorized')
+ORDER BY month DESC, total_spent DESC;"""
+    }
+    
+    # Sample query selector
+    selected_sample = st.selectbox(
+        "Sample Queries",
+        options=list(sample_queries.keys()),
+        help="Choose a sample query to load, or write your own below"
+    )
+    
+    # Load selected sample query
+    if selected_sample != "Select a sample query below" and sample_queries[selected_sample]:
+        default_query = sample_queries[selected_sample]
+    else:
+        default_query = "SELECT * FROM transactions LIMIT 10;"
+    
+    # Query input text area
+    query_text = st.text_area(
+        "SQL Query",
+        value=default_query,
+        height=150,
+        help="Enter your SELECT query here. Only read-only queries are allowed.",
+        placeholder="SELECT * FROM transactions WHERE amount > 100 LIMIT 10;"
+    )
+    
+    # Execute button
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        execute_button = st.button("▶️ Execute Query", type="primary")
+    with col2:
+        if execute_button and not query_text.strip():
+            st.error("Please enter a query.")
+    
+    # Query execution
+    if execute_button and query_text.strip():
+        # Validate query is read-only
+        query_upper = query_text.strip().upper()
+        forbidden_keywords = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'CREATE', 'ALTER', 'TRUNCATE', 'REPLACE']
+        
+        if any(keyword in query_upper for keyword in forbidden_keywords):
+            st.error("❌ Only SELECT queries are allowed. Detected forbidden SQL keyword.")
+        elif not query_upper.startswith('SELECT'):
+            st.error("❌ Only SELECT queries are allowed. Query must start with SELECT.")
+        else:
+            try:
+                # Execute the query safely
+                with st.spinner("Executing query..."):
+                    result_df = data_manager._execute_read_only_query(query_text)
+                    
+                    if result_df is not None and not result_df.empty:
+                        # Display results
+                        st.success(f"✅ Query executed successfully. {len(result_df)} rows returned.")
+                        
+                        # Show results in a nice format
+                        st.dataframe(
+                            result_df,
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                        
+                        # Download option
+                        csv_data = result_df.to_csv(index=False)
+                        st.download_button(
+                            label="📥 Download Results as CSV",
+                            data=csv_data,
+                            file_name=f"query_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            mime="text/csv"
+                        )
+                        
+                    elif result_df is not None and result_df.empty:
+                        st.info("✅ Query executed successfully but returned no results.")
+                    else:
+                        st.error("❌ Query returned no data.")
+                        
+            except Exception as e:
+                st.error(f"❌ Query execution failed: {str(e)}")
+                st.caption("Check your SQL syntax and ensure you're only using SELECT statements.")
+    
+    # Database schema reference
+    with st.expander("📊 Database Schema Reference", expanded=False):
+        st.markdown("**Available Tables and Columns:**")
+        
+        schema_info = {
+            "transactions": [
+                "transaction_id", "account_id", "date", "name", "merchant_name", 
+                "original_description", "amount", "currency", "pending", "transaction_type",
+                "location", "payment_details", "website", "check_number", "plaid_category",
+                "ai_category", "ai_reason", "manual_category", "notes", "tags", 
+                "created_at", "updated_at"
+            ],
+            "accounts": [
+                "id", "institution_id", "bank_name", "account_name", "official_name",
+                "account_type", "account_subtype", "mask", "balance_current", 
+                "balance_available", "balance_limit", "currency_code", "account_owner",
+                "is_active", "created_at", "updated_at"
+            ],
+            "institutions": [
+                "id", "access_token", "cursor", "created_at", "last_sync", "updated_at"
+            ]
+        }
+        
+        for table, columns in schema_info.items():
+            st.markdown(f"**`{table}`**")
+            cols_per_row = 3
+            for i in range(0, len(columns), cols_per_row):
+                col_group = columns[i:i+cols_per_row]
+                cols = st.columns(len(col_group))
+                for j, col_name in enumerate(col_group):
+                    with cols[j]:
+                        st.code(col_name, language=None)
+            st.markdown("")
     
 # Account Management Section
 with st.expander("🔧 Account Management", expanded=False):
