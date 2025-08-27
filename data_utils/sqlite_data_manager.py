@@ -982,6 +982,26 @@ class SqliteDataManager:
         except (ValueError, TypeError):
             return False
     
+    def _execute_read_only_query(self, query: str) -> Optional[pd.DataFrame]:
+        """
+        Execute a read-only SQL query and return results as DataFrame.
+        
+        Args:
+            query: SQL SELECT query string
+            
+        Returns:
+            DataFrame with query results, or None if error
+        """
+        try:
+            with self._get_connection() as conn:
+                result_df = pd.read_sql_query(query, conn)
+                self.logger.info(f"Executed read-only query, returned {len(result_df)} rows")
+                return result_df
+                
+        except Exception as e:
+            self.logger.error(f"Error executing read-only query: {e}")
+            raise  # Re-raise to let the UI handle the error display
+    
     # Category Management - New simplified methods
     
     def update_ai_category(self, transaction_id: str, category: str, reason: str = None) -> bool:
