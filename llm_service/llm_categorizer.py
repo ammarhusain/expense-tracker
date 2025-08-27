@@ -11,8 +11,13 @@ from transaction_types import Transaction
 import time
 
 class TransactionLLMCategorizer:
-    def __init__(self, api_key: str = None):
-        """Initialize the LLM categorizer with Claude API client"""
+    def __init__(self, api_key: str = None, custom_prompt: str = None):
+        """Initialize the LLM categorizer with Claude API client
+        
+        Args:
+            api_key: Anthropic API key
+            custom_prompt: Custom prompt template to use instead of default file
+        """
         # Try to get API key from multiple sources
         if api_key:
             self.api_key = api_key
@@ -37,8 +42,15 @@ class TransactionLLMCategorizer:
         self.model = "claude-sonnet-4-20250514"
         self.max_tokens = 1500
         
-        # Load prompt template - throw error if not found
-        self.prompt_template = self._load_prompt_template()
+        # Load prompt template - use custom if provided, otherwise load from file
+        if custom_prompt:
+            self.prompt_template = custom_prompt
+        else:
+            self.prompt_template = self._load_prompt_template()
+    
+    def update_prompt_template(self, new_prompt: str):
+        """Update the prompt template for this session"""
+        self.prompt_template = new_prompt
     
     def _load_prompt_template(self) -> str:
         """Load the categorization prompt template"""

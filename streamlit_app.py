@@ -11,6 +11,85 @@ from config import create_services, get_category_mapping, get_all_subcategories,
 from transaction_types import SyncResult
 from data_utils.s3_database_manager import db_manager
 
+# Helper function for prompt management
+def load_default_prompt():
+    """Load the default categorization prompt template"""
+    prompt_path = os.path.join('llm_service', 'prompts', 'categorization_prompt.md')
+    try:
+        with open(prompt_path, 'r') as f:
+            return f.read()
+    except FileNotFoundError:
+        return "Default prompt template not found."
+
+def validate_prompt_template(prompt: str) -> bool:
+    """Validate that prompt contains required placeholders"""
+    required_placeholders = ['{{CATEGORIES}}', '{date}', '{name}', '{amount}']
+    return all(placeholder in prompt for placeholder in required_placeholders)
+
+@st.dialog("🎯 Customize Categorization Prompt")
+def prompt_editor():
+    """Dialog modal for editing the categorization prompt template"""
+    # Initialize session state if needed
+    if 'custom_prompt' not in st.session_state:
+        st.session_state.custom_prompt = load_default_prompt()
+    
+    # Show current status
+    is_using_custom = st.session_state.custom_prompt != load_default_prompt()
+    if is_using_custom:
+        st.info("🎨 Currently using custom prompt")
+    else:
+        st.info("📝 Currently using default prompt")
+    
+    # Validate current prompt
+    is_valid = validate_prompt_template(st.session_state.custom_prompt)
+    if not is_valid:
+        st.error("⚠️ Current prompt is missing required placeholders!")
+    
+    st.markdown("**Edit your categorization prompt template below:**")
+    
+    # Text area for editing
+    edited_prompt = st.text_area(
+        "Prompt Template",
+        value=st.session_state.custom_prompt,
+        height=400,
+        help="Use {{CATEGORIES}} for categories and {field_name} for transaction fields",
+        label_visibility="collapsed"
+    )
+    
+    # Show required placeholders
+    st.caption("**Required placeholders:** {{CATEGORIES}}, {date}, {name}, {amount}")
+    
+    # Action buttons
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if st.button("💾 Save", type="primary", use_container_width=True):
+            if validate_prompt_template(edited_prompt):
+                st.session_state.custom_prompt = edited_prompt
+                st.success("✅ Prompt saved!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("❌ Invalid prompt! Missing required placeholders.")
+    
+    with col2:
+        if st.button("🔄 Reset", use_container_width=True):
+            st.session_state.custom_prompt = load_default_prompt()
+            st.success("✅ Reset to default!")
+            time.sleep(1)
+            st.rerun()
+    
+    with col3:
+        if st.button("✅ Validate", use_container_width=True):
+            if validate_prompt_template(edited_prompt):
+                st.success("✅ Valid prompt!")
+            else:
+                st.error("❌ Missing placeholders!")
+    
+    with col4:
+        if st.button("❌ Cancel", use_container_width=True):
+            st.rerun()
+
 # Page config
 st.set_page_config(
     page_title="Personal Finance Tracker",
@@ -84,9 +163,22 @@ def get_services(local_path, cache_key):
     """Initialize services with S3-aware database management."""
     return create_services(local_path)
 
+def get_custom_categorizer():
+    """Get categorizer with custom prompt if available"""
+    custom_prompt = st.session_state.get('custom_prompt')
+    if custom_prompt and custom_prompt != load_default_prompt():
+        from llm_service.llm_categorizer import TransactionLLMCategorizer
+        return TransactionLLMCategorizer(custom_prompt=custom_prompt)
+    return None
+
 # Create a cache key that changes when database selection changes
 cache_key = f"services_{selected_db_path}"
 transaction_service, data_manager = get_services(selected_db_path, cache_key)
+
+# Override categorizer if custom prompt is being used
+custom_categorizer = get_custom_categorizer()
+if custom_categorizer:
+    transaction_service.categorizer = custom_categorizer
 
 # Database info
 with st.sidebar.expander("📊 Database Info", expanded=False):
@@ -511,6 +603,14 @@ with st.expander("💡 Quick Insights", expanded=False):
         st.info("No transaction data available for insights.")
 
 with st.expander("🏷️ Transaction Management", expanded=True):
+    
+    # Add prompt editor button at the top
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.write("")  # Spacing
+    with col2:
+        if st.button("🎯 Edit AI Prompt", help="Customize the AI categorization prompt template"):
+            prompt_editor()
     
     df_display = df_filtered
     
