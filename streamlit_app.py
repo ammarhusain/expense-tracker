@@ -908,10 +908,70 @@ with st.expander("🔍 Database Query Interface", expanded=False):
     st.markdown("**Execute read-only SQL queries directly on the database**")
     st.caption("⚠️ Only SELECT queries are allowed. All queries are read-only for safety.")
     
-    # Sample queries dropdown
-    sample_queries = {
-        "Select a sample query below": "",        
-        "Total transactions by month": """SELECT 
+    # Query input method selector
+    query_method = st.radio(
+        "How would you like to create your query?",
+        options=["Natural Language", "Sample Queries", "Write SQL Directly"],
+        horizontal=True,
+        help="Choose your preferred method to create database queries"
+    )
+    
+    # Initialize query text
+    query_text = ""
+    
+    if query_method == "Natural Language":
+        st.markdown("**🗣️ Ask a question in plain English**")
+        
+        # Natural language input
+        nl_query = st.text_input(
+            "Your Question",
+            placeholder="e.g., 'Show me my largest expenses last month' or 'What are my top spending categories?'",
+            help="Ask any question about your financial data in natural language"
+        )
+        
+        # Generate SQL button
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            generate_sql_button = st.button("🤖 Generate SQL", type="secondary")
+        with col2:
+            if generate_sql_button and not nl_query.strip():
+                st.error("Please enter a question.")
+        
+        # Generate SQL from natural language
+        if generate_sql_button and nl_query.strip():
+            try:
+                from llm_service.sql_query_generator import NaturalLanguageQueryGenerator
+                
+                with st.spinner("🤖 Converting your question to SQL..."):
+                    generator = NaturalLanguageQueryGenerator()
+                    result = generator.generate_sql_query(nl_query.strip())
+                    
+                    if result['success']:
+                        query_text = result['sql_query']
+                        st.success(f"✅ {result['explanation']}")
+                        # st.code(query_text, language='sql')
+                    else:
+                        st.error(f"❌ {result['explanation']}")
+                        
+            except ImportError as e:
+                st.error(f"❌ Natural language query generation not available: {str(e)}")
+            except Exception as e:
+                st.error(f"❌ Error generating SQL: {str(e)}")
+        
+        # If we have generated SQL, use it as the query text
+        if not query_text and 'query_text' not in st.session_state:
+            query_text = "-- Your generated SQL will appear here\nSELECT * FROM transactions LIMIT 10;"
+        elif query_text:
+            # Store in session state so it persists
+            st.session_state.query_text = query_text
+        elif 'query_text' in st.session_state:
+            query_text = st.session_state.query_text
+    
+    elif query_method == "Sample Queries":
+        # Sample queries dropdown
+        sample_queries = {
+            "Select a sample query below": "",        
+            "Total transactions by month": """SELECT 
     substr(date, 1, 7) as month,
     COUNT(*) as transaction_count,
     SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as total_spending,
@@ -920,7 +980,7 @@ FROM transactions
 GROUP BY substr(date, 1, 7) 
 ORDER BY month DESC
 LIMIT 12;""",
-        "Top spending categories": """SELECT 
+            "Top spending categories": """SELECT 
     COALESCE(ai_category, 'Uncategorized') as category,
     COUNT(*) as transaction_count,
     SUM(amount) as total_spent,
@@ -930,7 +990,7 @@ WHERE amount > 0
 GROUP BY COALESCE(ai_category, 'Uncategorized')
 ORDER BY total_spent DESC
 LIMIT 10;""",
-        "Account balances and activity": """SELECT 
+            "Account balances and activity": """SELECT 
     a.bank_name,
     a.account_name,
     a.balance_current,
@@ -941,7 +1001,7 @@ FROM accounts a
 LEFT JOIN transactions t ON a.id = t.account_id
 GROUP BY a.id, a.bank_name, a.account_name, a.balance_current
 ORDER BY a.bank_name, a.account_name;""",
-        "Recent large transactions": """SELECT 
+            "Recent large transactions": """SELECT 
     t.date,
     t.name,
     t.merchant_name,
@@ -954,7 +1014,7 @@ JOIN accounts a ON t.account_id = a.id
 WHERE ABS(t.amount) > 100
 ORDER BY t.date DESC, ABS(t.amount) DESC
 LIMIT 20;""",
-        "Pending transactions": """SELECT 
+            "Pending transactions": """SELECT 
     t.date,
     t.name,
     t.amount,
@@ -965,7 +1025,7 @@ FROM transactions t
 JOIN accounts a ON t.account_id = a.id
 WHERE t.pending = 1
 ORDER BY t.date DESC;""",
-        "Monthly spending trends by category": """SELECT 
+            "Monthly spending trends by category": """SELECT 
     substr(t.date, 1, 7) as month,
     COALESCE(t.ai_category, 'Uncategorized') as category,
     SUM(t.amount) as total_spent,
@@ -973,26 +1033,37 @@ ORDER BY t.date DESC;""",
 FROM transactions t
 WHERE t.amount > 0
 GROUP BY substr(t.date, 1, 7), COALESCE(t.ai_category, 'Uncategorized')
-ORDER BY month DESC, total_spent DESC;"""
-    }
+ORDER BY month DESC, total_spent DESC;""",
+            "Show database schema": """SELECT name, type, sql 
+FROM sqlite_master 
+WHERE type IN ('table', 'view', 'index', 'trigger') 
+AND name NOT LIKE 'sqlite_%'
+ORDER BY type, name;""",
+            "Show transactions table structure": "PRAGMA table_info(transactions);",
+            "Show accounts table structure": "PRAGMA table_info(accounts);",
+            "Show all tables": "PRAGMA table_list;"
+        }
+        
+        # Sample query selector
+        selected_sample = st.selectbox(
+            "Sample Queries",
+            options=list(sample_queries.keys()),
+            help="Choose a sample query to load, or write your own below"
+        )
+        
+        # Load selected sample query
+        if selected_sample != "Select a sample query below" and sample_queries[selected_sample]:
+            query_text = sample_queries[selected_sample]
+        else:
+            query_text = "SELECT * FROM transactions LIMIT 10;"
     
-    # Sample query selector
-    selected_sample = st.selectbox(
-        "Sample Queries",
-        options=list(sample_queries.keys()),
-        help="Choose a sample query to load, or write your own below"
-    )
+    else:  # Write SQL Directly
+        query_text = "SELECT * FROM transactions LIMIT 10;"
     
-    # Load selected sample query
-    if selected_sample != "Select a sample query below" and sample_queries[selected_sample]:
-        default_query = sample_queries[selected_sample]
-    else:
-        default_query = "SELECT * FROM transactions LIMIT 10;"
-    
-    # Query input text area
+    # Query input text area (always shown for editing)
     query_text = st.text_area(
         "SQL Query",
-        value=default_query,
+        value=query_text,
         height=150,
         help="Enter your SELECT query here. Only read-only queries are allowed.",
         placeholder="SELECT * FROM transactions WHERE amount > 100 LIMIT 10;"
@@ -1012,10 +1083,13 @@ ORDER BY month DESC, total_spent DESC;"""
         query_upper = query_text.strip().upper()
         forbidden_keywords = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'CREATE', 'ALTER', 'TRUNCATE', 'REPLACE']
         
+        # Allow read-only commands
+        read_only_commands = ['SELECT', 'PRAGMA TABLE_INFO', 'PRAGMA INDEX_LIST', 'PRAGMA TABLE_LIST', 'EXPLAIN QUERY PLAN']
+        
         if any(keyword in query_upper for keyword in forbidden_keywords):
-            st.error("❌ Only SELECT queries are allowed. Detected forbidden SQL keyword.")
-        elif not query_upper.startswith('SELECT'):
-            st.error("❌ Only SELECT queries are allowed. Query must start with SELECT.")
+            st.error("❌ Only read-only queries are allowed. Detected forbidden SQL keyword.")
+        elif not any(query_upper.startswith(cmd) for cmd in read_only_commands):
+            st.error("❌ Only read-only queries are allowed. Must start with SELECT, PRAGMA, or EXPLAIN.")
         else:
             try:
                 # Execute the query safely
@@ -1050,41 +1124,7 @@ ORDER BY month DESC, total_spent DESC;"""
             except Exception as e:
                 st.error(f"❌ Query execution failed: {str(e)}")
                 st.caption("Check your SQL syntax and ensure you're only using SELECT statements.")
-    
-    # Database schema reference
-    with st.expander("📊 Database Schema Reference", expanded=False):
-        st.markdown("**Available Tables and Columns:**")
         
-        schema_info = {
-            "transactions": [
-                "transaction_id", "account_id", "date", "name", "merchant_name", 
-                "original_description", "amount", "currency", "pending", "transaction_type",
-                "location", "payment_details", "website", "check_number", "plaid_category",
-                "ai_category", "ai_reason", "manual_category", "notes", "tags", 
-                "created_at", "updated_at"
-            ],
-            "accounts": [
-                "id", "institution_id", "bank_name", "account_name", "official_name",
-                "account_type", "account_subtype", "mask", "balance_current", 
-                "balance_available", "balance_limit", "currency_code", "account_owner",
-                "is_active", "created_at", "updated_at"
-            ],
-            "institutions": [
-                "id", "access_token", "cursor", "created_at", "last_sync", "updated_at"
-            ]
-        }
-        
-        for table, columns in schema_info.items():
-            st.markdown(f"**`{table}`**")
-            cols_per_row = 3
-            for i in range(0, len(columns), cols_per_row):
-                col_group = columns[i:i+cols_per_row]
-                cols = st.columns(len(col_group))
-                for j, col_name in enumerate(col_group):
-                    with cols[j]:
-                        st.code(col_name, language=None)
-            st.markdown("")
-    
 # Account Management Section
 with st.expander("🔧 Account Management", expanded=False):
     st.subheader("Sync Options")
