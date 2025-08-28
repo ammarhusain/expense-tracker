@@ -2,25 +2,49 @@ import os
 from dotenv import load_dotenv
 from dataclasses import dataclass
 from typing import Dict, List
+import streamlit as st
 
 load_dotenv()
 
+def get_plaid_config():
+    """Get Plaid configuration from Streamlit secrets only"""
+    if not hasattr(st, 'secrets') or "plaid" not in st.secrets:
+        raise ValueError(
+            "Plaid configuration not found in Streamlit secrets. "
+            "Please add [plaid] section to .streamlit/secrets.toml with client_id, secret, and env"
+        )
+    
+    plaid_secrets = st.secrets["plaid"]
+    required_keys = ['client_id', 'secret', 'env']
+    
+    for key in required_keys:
+        if key not in plaid_secrets:
+            raise ValueError(f"Missing required Plaid configuration: {key}")
+    
+    return {
+        'client_id': plaid_secrets["client_id"],
+        'secret': plaid_secrets["secret"],
+        'env': plaid_secrets["env"]
+    }
+
 @dataclass
 class Config:
-    # Plaid API configuration
-    plaid_client_id: str = os.getenv("PLAID_CLIENT_ID", "")
-    plaid_secret: str = os.getenv("PLAID_SECRET", "")
-    plaid_env: str = os.getenv("PLAID_ENV", "sandbox")
-    
-    # Data storage configuration - single path, format determined by extension
-    data_path: str = os.getenv("DATA_PATH", "./data/transactions.db")  # .db = SQLite
+    def __init__(self):
+        plaid_config = get_plaid_config()
         
-    # SQLite configuration
-    sqlite_timeout: float = float(os.getenv("SQLITE_TIMEOUT", "60.0"))
-    
-    # General configuration
-    sync_interval_hours: int = int(os.getenv("SYNC_INTERVAL_HOURS", "24"))
-    
+        # Plaid API configuration
+        self.plaid_client_id: str = plaid_config['client_id']
+        self.plaid_secret: str = plaid_config['secret']
+        self.plaid_env: str = plaid_config['env']
+        
+        # Data storage configuration - single path, format determined by extension
+        self.data_path: str = os.getenv("DATA_PATH", "./data/transactions.db")  # .db = SQLite
+            
+        # SQLite configuration
+        self.sqlite_timeout: float = float(os.getenv("SQLITE_TIMEOUT", "60.0"))
+        
+        # General configuration
+        self.sync_interval_hours: int = int(os.getenv("SYNC_INTERVAL_HOURS", "24"))
 
 config = Config()
 
