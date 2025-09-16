@@ -1,6 +1,7 @@
 import sqlite3
 import pandas as pd
 import os
+import json
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple, Any
 import logging
@@ -312,6 +313,10 @@ class SqliteDataManager:
             params = []
             
             for field, value in updates.items():
+                # Normalize tags if updating tags field
+                if field == 'tags':
+                    value = self._normalize_tags(value)
+                
                 set_clauses.append(f"{field} = ?")
                 params.append(value)
             
@@ -360,6 +365,10 @@ class SqliteDataManager:
                         params = []
                         
                         for field, value in field_updates.items():
+                            # Normalize tags if updating tags field
+                            if field == 'tags':
+                                value = self._normalize_tags(value)
+                            
                             set_clauses.append(f"{field} = ?")
                             params.append(value)
                         
@@ -484,6 +493,191 @@ class SqliteDataManager:
     
     # Helper methods
     
+    def _normalize_tags(self, tags_input) -> str:
+        """
+        Normalize tags input to JSON array string.
+        
+        Args:
+            tags_input: Can be string (comma-separated), list, or JSON string
+            
+        Returns:
+            JSON array string (e.g., '["tag1", "tag2"]')
+        """
+        if not tags_input:
+            return '[]'
+        
+        # If already a valid JSON array string, return as-is
+        if isinstance(tags_input, str):
+            try:
+                # Try to parse as JSON first
+                parsed = json.loads(tags_input)
+                if isinstance(parsed, list):
+                    # Ensure all items are strings and remove empty ones
+                    clean_tags = [str(tag).strip() for tag in parsed if str(tag).strip()]
+                    return json.dumps(clean_tags)
+            except (json.JSONDecodeError, ValueError):
+                pass
+            
+            # Treat as comma-separated string
+            if ',' in tags_input or tags_input.strip():
+                tag_list = [tag.strip() for tag in tags_input.split(',') if tag.strip()]
+                return json.dumps(tag_list)
+        
+        # If it's already a list
+        elif isinstance(tags_input, list):
+            clean_tags = [str(tag).strip() for tag in tags_input if str(tag).strip()]
+            return json.dumps(clean_tags)
+        
+        # Fallback
+        return '[]'
+    
+    def _parse_tags_from_db(self, tags_json: str) -> List[str]:
+        """
+        Parse tags from database JSON string to Python list.
+        
+        Args:
+            tags_json: JSON array string from database
+            
+        Returns:
+            List of tag strings
+        """
+        if not tags_json:
+            return []
+        
+        try:
+            tags = json.loads(tags_json)
+            return tags if isinstance(tags, list) else []
+        except (json.JSONDecodeError, ValueError):
+            # Fallback for legacy comma-separated format
+            if isinstance(tags_json, str) and tags_json.strip():
+                return [tag.strip() for tag in tags_json.split(',') if tag.strip()]
+            return []
+    
+    def add_tag_to_transaction(self, transaction_id: str, new_tag: str) -> bool:
+        """Add a single tag to a transaction's tag array."""
+        if not new_tag.strip():
+            return False
+            
+        try:
+            # Get current tags
+            transaction = self.read_by_id(transaction_id)
+            if not transaction:
+                return False
+            
+            current_tags = self._parse_tags_from_db(transaction.get('tags', '[]'))
+            
+            # Add new tag if not already present
+            new_tag_clean = new_tag.strip()
+            if new_tag_clean not in current_tags:
+                current_tags.append(new_tag_clean)
+                updated_tags_json = json.dumps(current_tags)
+                return self.update_by_id(transaction_id, {'tags': updated_tags_json})
+            
+            return True  # Tag already exists
+            
+        except Exception as e:
+            self.logger.error(f"Error adding tag to transaction {transaction_id}: {e}")
+            return False
+    
+    def remove_tag_from_transaction(self, transaction_id: str, tag_to_remove: str) -> bool:
+        """Remove a specific tag from a transaction's tag array."""
+        if not tag_to_remove.strip():
+            return False
+            
+        try:
+            # Get current tags
+            transaction = self.read_by_id(transaction_id)
+            if not transaction:
+                return False
+            
+            current_tags = self._parse_tags_from_db(transaction.get('tags', '[]'))
+            
+            # Remove tag if present
+            tag_clean = tag_to_remove.strip()
+            if tag_clean in current_tags:
+                current_tags.remove(tag_clean)
+                updated_tags_json = json.dumps(current_tags)
+                return self.update_by_id(transaction_id, {'tags': updated_tags_json})
+            
+            return True  # Tag wasn't there anyway
+            
+        except Exception as e:
+            self.logger.error(f"Error removing tag from transaction {transaction_id}: {e}")
+            return False
+    
+    def find_transactions_by_tag(self, tag: str) -> pd.DataFrame:
+        """Find all transactions that have a specific tag."""
+        try:
+            query = """
+            SELECT t.*, a.bank_name, a.account_name, a.account_owner
+            FROM transactions t
+            JOIN accounts a ON t.account_id = a.id
+            WHERE json_valid(t.tags) 
+            AND EXISTS (
+                SELECT 1 FROM json_each(t.tags) 
+                WHERE json_each.value = ?
+            )
+            ORDER BY t.date DESC
+            """
+            
+            with self._get_connection() as conn:
+                return pd.read_sql_query(query, conn, params=[tag])
+                
+        except Exception as e:
+            self.logger.error(f"Error finding transactions by tag '{tag}': {e}")
+            return pd.DataFrame()
+    
+    def get_all_tags(self) -> List[str]:
+        """Get all unique tags used across all transactions."""
+        try:
+            query = """
+            SELECT DISTINCT json_each.value as tag
+            FROM transactions, json_each(transactions.tags)
+            WHERE json_valid(transactions.tags)
+            ORDER BY tag
+            """
+            
+            with self._get_connection() as conn:
+                cursor = conn.execute(query)
+                return [row[0] for row in cursor.fetchall()]
+                
+        except Exception as e:
+            self.logger.error(f"Error getting all tags: {e}")
+            return []
+    
+    def get_tag_statistics(self) -> List[Dict]:
+        """Get statistics about tag usage."""
+        try:
+            query = """
+            SELECT 
+                json_each.value as tag,
+                COUNT(*) as usage_count,
+                COUNT(DISTINCT t.account_id) as account_count,
+                MIN(t.date) as first_used,
+                MAX(t.date) as last_used
+            FROM transactions t, json_each(t.tags)
+            WHERE json_valid(t.tags)
+            GROUP BY json_each.value
+            ORDER BY usage_count DESC, tag
+            """
+            
+            with self._get_connection() as conn:
+                cursor = conn.execute(query)
+                return [
+                    {
+                        'tag': row[0],
+                        'usage_count': row[1],
+                        'account_count': row[2],
+                        'first_used': row[3],
+                        'last_used': row[4]
+                    }
+                    for row in cursor.fetchall()
+                ]
+                
+        except Exception as e:
+            self.logger.error(f"Error getting tag statistics: {e}")
+            return []
+
     def _transaction_exists(self, conn: sqlite3.Connection, transaction_id: str) -> bool:
         """Check if transaction exists using provided connection."""
         cursor = conn.execute("SELECT 1 FROM transactions WHERE transaction_id = ?", (transaction_id,))
@@ -841,6 +1035,9 @@ class SqliteDataManager:
     def _insert_transaction_with_categories(self, conn: sqlite3.Connection, transaction: Dict):
         """Insert transaction with all embedded category data."""
         
+        # Normalize tags to JSON array format
+        tags_normalized = self._normalize_tags(transaction.get('tags'))
+        
         conn.execute("""
             INSERT INTO transactions (
                 transaction_id, account_id, date, name, merchant_name, original_description,
@@ -868,7 +1065,7 @@ class SqliteDataManager:
             transaction.get('ai_reason'),
             transaction.get('manual_category'),
             transaction.get('notes'),
-            transaction.get('tags')
+            tags_normalized
         ))
     
     def _update_existing_transaction(self, conn: sqlite3.Connection, transaction: Dict) -> bool:

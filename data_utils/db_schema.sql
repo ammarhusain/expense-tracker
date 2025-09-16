@@ -56,7 +56,7 @@ CREATE TABLE transactions (
     ai_reason TEXT,                         
     manual_category TEXT,                   
     notes TEXT,                             
-    tags TEXT,                              
+    tags JSON DEFAULT '[]',                              
     
     -- System fields
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -85,6 +85,9 @@ CREATE INDEX idx_transactions_pending ON transactions (pending);
 -- Category queries (simplified - direct column indexes)
 CREATE INDEX idx_transactions_ai_category ON transactions (ai_category);
 CREATE INDEX idx_transactions_manual_category ON transactions (manual_category);
+
+-- JSON tag index for efficient tag searches
+CREATE INDEX idx_transactions_tags ON transactions (json_each.value) WHERE json_valid(tags);
 
 -- Composite indexes for common filter combinations
 CREATE INDEX idx_transactions_account_date ON transactions (account_id, date);

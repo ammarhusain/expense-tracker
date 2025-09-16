@@ -5,11 +5,36 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import numpy as np
 import os
+import json
 
 # NEW: Import new architecture with S3 support
 from config import create_services, get_category_mapping, get_all_subcategories, CATEGORY_DEFINITIONS
 from transaction_types import SyncResult
 from data_utils.s3_database_manager import db_manager
+
+
+def format_tags_for_display(tags_json: str) -> str:
+    """Convert JSON tags array to comma-separated string for display."""
+    if not tags_json:
+        return ""
+    
+    try:
+        tags_list = json.loads(tags_json) if isinstance(tags_json, str) else tags_json
+        if isinstance(tags_list, list):
+            return ", ".join(tags_list)
+        return str(tags_json)  # Fallback for non-list values
+    except (json.JSONDecodeError, ValueError):
+        return str(tags_json)  # Fallback for invalid JSON
+
+
+def format_tags_for_storage(tags_display: str) -> str:
+    """Convert comma-separated string to JSON tags array for storage."""
+    if not tags_display or not tags_display.strip():
+        return "[]"
+    
+    # Split by comma and clean up
+    tags_list = [tag.strip() for tag in tags_display.split(',') if tag.strip()]
+    return json.dumps(tags_list)
 
 
 @st.dialog("📋 Category Reference", width="large")
@@ -121,14 +146,28 @@ with st.sidebar.expander("🗄️ Database Status", expanded=True):
 
 # Initialize services with S3 support and selected database path
 @st.cache_resource
-def get_services(local_path, cache_key):
+def get_services(local_path):
     """Initialize services with S3-aware database management."""
     return create_services(local_path)
 
 
-# Create a cache key that changes when database selection changes
-cache_key = f"services_{selected_db_path}"
-transaction_service, data_manager = get_services(selected_db_path, cache_key)
+# Create services for the selected database
+transaction_service, data_manager = get_services(selected_db_path)
+
+# Load transaction data using new service - define function here so it can be cleared later
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def load_transactions():
+    """Load transactions using the service layer."""
+    df = transaction_service.get_transactions()
+    if not df.empty and 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'])
+        df['month'] = df['date'].dt.to_period('M')
+        df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+        
+        # Create combined account display column
+        if 'bank_name' in df.columns and 'account_name' in df.columns:
+            df['account_display'] = df['bank_name'].fillna('') + ' ' + df['account_name'].fillna('')
+    return df
 
 
 # Database info
@@ -154,22 +193,7 @@ with st.sidebar.expander("📊 Database Info", expanded=False):
 # Header
 st.header('💰 Personal Finance Tracker')
 
-# Load transaction data using new service
-@st.cache_data(ttl=300)  # Cache for 5 minutes
-def load_transactions(cache_key):
-    """Load transactions using the service layer."""
-    df = transaction_service.get_transactions()
-    if not df.empty and 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'])
-        df['month'] = df['date'].dt.to_period('M')
-        df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
-        
-        # Create combined account display column
-        if 'bank_name' in df.columns and 'account_name' in df.columns:
-            df['account_display'] = df['bank_name'].fillna('') + ' ' + df['account_name'].fillna('')
-    return df
-
-df = load_transactions(cache_key)
+df = load_transactions()
 
 if df.empty:
     st.warning("No transactions found. Please sync your accounts or check your data files.")
@@ -585,6 +609,10 @@ with st.expander("🏷️ Transaction Management", expanded=True):
                 if col in df_for_editing.columns:
                     df_for_editing[col] = df_for_editing[col].fillna('').astype(str)
             
+            # Convert JSON tags to comma-separated display format for editing
+            if 'tags' in df_for_editing.columns:
+                df_for_editing['tags'] = df_for_editing['tags'].apply(format_tags_for_display)
+            
             # Get all valid categories from new category structure
             all_category_options = get_all_subcategories()
             
@@ -632,7 +660,7 @@ with st.expander("🏷️ Transaction Management", expanded=True):
                     ),
                     "tags": st.column_config.TextColumn(
                         "Tags",
-                        help="Add comma-separated tags"
+                        help="Add comma-separated tags (will be stored as JSON array)"
                     ),
                     "account_display": st.column_config.TextColumn(
                         "Account",
@@ -669,7 +697,8 @@ with st.expander("🏷️ Transaction Management", expanded=True):
                             if 'notes' in edited_row:
                                 row_updates['notes'] = edited_row['notes']
                             if 'tags' in edited_row:
-                                row_updates['tags'] = edited_row['tags']
+                                # Convert comma-separated tags back to JSON format for storage
+                                row_updates['tags'] = format_tags_for_storage(edited_row['tags'])
                             
                             if row_updates:
                                 updates[transaction_id] = row_updates
@@ -694,7 +723,7 @@ with st.expander("🏷️ Transaction Management", expanded=True):
             # Display read-only comprehensive view
             display_columns = [
                 'date', 'authorized_date', 'name', 'merchant_name', 'amount', 'ai_category', 'notes', 'tags',
-                'ai_reason', 'plaid_category', 'account_display', 'account_owner', 'pending', 'transaction_id'
+                'ai_reason', 'plaid_category', 'account_display', 'pending', 'transaction_id'
             ]
             
             available_columns = [col for col in display_columns if col in df_display.columns]
@@ -705,6 +734,10 @@ with st.expander("🏷️ Transaction Management", expanded=True):
             # Convert date strings to datetime for proper display
             if 'authorized_date' in df_for_display.columns:
                 df_for_display['authorized_date'] = pd.to_datetime(df_for_display['authorized_date'], errors='coerce')
+            
+            # Convert JSON tags to comma-separated display format for read-only view
+            if 'tags' in df_for_display.columns:
+                df_for_display['tags'] = df_for_display['tags'].apply(format_tags_for_display)
             
             # Display transactions (read-only)
             st.dataframe(
@@ -740,7 +773,7 @@ with st.expander("🏷️ Transaction Management", expanded=True):
                     ),
                     "tags": st.column_config.TextColumn(
                         "Tags",
-                        help="Tags for this transaction"
+                        help="Tags for this transaction (JSON array format)"
                     ),
                     "plaid_category": st.column_config.TextColumn(
                         "Plaid categorization",
@@ -753,10 +786,6 @@ with st.expander("🏷️ Transaction Management", expanded=True):
                     "account_display": st.column_config.TextColumn(
                         "Account",
                         help="Bank and account name"
-                    ),
-                    "account_owner": st.column_config.TextColumn(
-                        "Account Owner",
-                        help="Account owner name"
                     ),
                     "pending": st.column_config.CheckboxColumn(
                         "Pending"
