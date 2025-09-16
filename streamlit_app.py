@@ -60,9 +60,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Clear any problematic session state on startup
+# Initialize session state if needed
 if 'initialized' not in st.session_state:
-    st.session_state.clear()
     st.session_state.initialized = True
 
 # Database Status - S3 or Local
@@ -84,12 +83,13 @@ with st.sidebar.expander("🗄️ Database Status", expanded=True):
             if st.button("☁️ Save to S3"):
                 if db_manager.upload_to_s3():
                     st.success("✅ Synced!")
-                    st.rerun()
+                    # No need to rerun for S3 upload
         
         with col2:
             if st.button("📥 Load from S3"):
-                # Clear cache and reload
+                # Clear caches and reload
                 st.cache_resource.clear()
+                load_transactions.clear()
                 st.rerun()
                 
         # Show file info
@@ -155,7 +155,7 @@ with st.sidebar.expander("📊 Database Info", expanded=False):
 st.header('💰 Personal Finance Tracker')
 
 # Load transaction data using new service
-# @st.cache_data
+@st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_transactions(cache_key):
     """Load transactions using the service layer."""
     df = transaction_service.get_transactions()
@@ -167,7 +167,6 @@ def load_transactions(cache_key):
         # Create combined account display column
         if 'bank_name' in df.columns and 'account_name' in df.columns:
             df['account_display'] = df['bank_name'].fillna('') + ' ' + df['account_name'].fillna('')
-    print(df['account_display'].dropna().unique())
     return df
 
 df = load_transactions(cache_key)
@@ -220,17 +219,42 @@ with st.sidebar:
     
     # Amount filter
     if not df_filtered.empty:
-        min_amount, max_amount = st.slider(
-            "Amount Range",
-            min_value=float(df_filtered['amount'].min()),
-            max_value=float(df_filtered['amount'].max()),
-            value=(float(df_filtered['amount'].min()), float(df_filtered['amount'].max())),
-            format="$%.2f"
-        )
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            min_amount = st.number_input(
+                "Min Amount",
+                value=float(df_filtered['amount'].min()),
+                step=0.01,
+                format="%.2f",
+                help="Minimum transaction amount"
+            )
+        
+        with col2:
+            max_amount = st.number_input(
+                "Max Amount",
+                value=float(df_filtered['amount'].max()),
+                step=0.01,
+                format="%.2f",
+                help="Maximum transaction amount"
+            )
+        
         df_filtered = df_filtered[
             (df_filtered['amount'] >= min_amount) & 
             (df_filtered['amount'] <= max_amount)
         ]
+    
+    # Absolute value filter
+    if not df_filtered.empty:
+        min_abs_value = st.number_input(
+            "Minimum Absolute Value",
+            min_value=0.0,
+            value=0.0,
+            step=0.01,
+            format="%.2f",
+            help="Filter out transactions below this absolute value (e.g., 1.00 filters out transactions between -$1 and $1)"
+        )
+        df_filtered = df_filtered[abs(df_filtered['amount']) >= min_abs_value]
     
 # Key metrics and analysis sections collapsed by default 
 with st.expander("📊 Financial Overview", expanded=True):
@@ -658,8 +682,9 @@ with st.expander("🏷️ Transaction Management", expanded=True):
                         else:
                             updated_count = data_manager.bulk_update(updates)
                         st.success(f"✅ Successfully saved changes to {updated_count} transactions!")
-                        st.cache_data.clear()  # Clear cache to refresh data
-                        st.rerun()  # Refresh the app to show updated data
+                        # Clear specific cache and rerun to refresh data
+                        load_transactions.clear()
+                        st.rerun()
                     else:
                         st.info("No changes were made.")
                         
@@ -770,8 +795,8 @@ with st.expander("🏷️ Transaction Management", expanded=True):
                     if result.success:
                         st.success(f"✅ Categorized as: **{result.category}**")
                         st.info(f"Reasoning: {result.reasoning}")
-                        # Clear cache to show updated data
-                        st.cache_data.clear()
+                        # Clear specific cache to show updated data
+                        load_transactions.clear()
                     else:
                         st.error(f"❌ Error: {result.error}")
                     
@@ -821,8 +846,8 @@ with st.expander("🏷️ Transaction Management", expanded=True):
                     else:
                         st.info(f"No uncategorized transactions found")
                 
-                # Clear cache to show updated data
-                st.cache_data.clear()
+                # Clear specific cache to show updated data
+                load_transactions.clear()
                 
         except Exception as e:
             st.error(f"❌ Error in bulk categorization: {str(e)}")
@@ -1087,7 +1112,9 @@ with st.expander("🔧 Account Management", expanded=False):
                     if result.institution_results:
                         for bank, count in result.institution_results.items():
                             st.write(f"• {bank}: {count} transactions")
-                    st.cache_data.clear()
+                    # Clear caches and rerun to show new data
+                    load_transactions.clear()
+                    get_services.clear()
                     st.rerun()
                 else:
                     st.error("❌ Sync failed:")

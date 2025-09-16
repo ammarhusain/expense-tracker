@@ -114,6 +114,7 @@ class TransactionLLMCategorizer:
         bank_name = transaction.bank_name or ''
         location = transaction.location or ''
         payment_details = transaction.payment_details or ''
+        notes = transaction.notes or ''
         
         # Use the consolidated plaid_category field and make it human-readable
         plaid_category_str = transaction.plaid_category or "None"
@@ -141,7 +142,8 @@ class TransactionLLMCategorizer:
             bank_name=bank_name,
             location=location,
             payment_details=payment_details,
-            plaid_categories=plaid_category_str
+            plaid_categories=plaid_category_str,
+            notes=notes
         )
         
         # Add transfer detection context if potential matches found
