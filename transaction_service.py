@@ -282,7 +282,6 @@ class TransactionService:
                                 'accounts': institution_data.get('accounts', []),
                                 'last_sync': institution_data.get('last_sync'),
                                 'created_at': institution_data.get('created_at'),
-                                'data_source': 'database',  # Indicate we're using cached data
                                 'plaid_error': str(plaid_error)
                             }
                     else:
@@ -290,8 +289,7 @@ class TransactionService:
                         accounts[institution_name] = {
                             'accounts': institution_data.get('accounts', []),
                             'last_sync': institution_data.get('last_sync'),
-                            'created_at': institution_data.get('created_at'),
-                            'data_source': 'database'
+                            'created_at': institution_data.get('created_at')
                         }
                 except Exception as e:
                     self.logger.error(f"Error processing accounts for {institution_name}: {e}")
@@ -300,7 +298,6 @@ class TransactionService:
                         'accounts': institution_data.get('accounts', []),
                         'last_sync': institution_data.get('last_sync'),
                         'created_at': institution_data.get('created_at'),
-                        'data_source': 'database',
                         'error': str(e)
                     }
             

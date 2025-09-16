@@ -275,9 +275,9 @@ with st.sidebar:
         
         date_range = st.date_input(
             "Date Range",
-            value=(min_date, max_date),
+            value=(min_date, "today"),
             min_value=min_date,
-            max_value=max_date
+            # max_value="tomorrow"
         )
         
         if len(date_range) == 2:
@@ -1218,13 +1218,8 @@ with st.expander("🔧 Account Management", expanded=False):
         
         for bank, info in accounts.items():
             if 'accounts' in info:
-                # Bank header with styling and data source indicator
-                data_source_icon = "🔄" if info.get('data_source') != 'database' else "💾"
-                data_source_text = "fresh data" if info.get('data_source') != 'database' else "cached data"
-                
-                st.markdown(f"###### 🏦 {bank} ({len(info['accounts'])} accounts) {data_source_icon}")
-                if info.get('data_source') == 'database':
-                    st.caption(f"ℹ️ Showing cached data from database (Plaid API unavailable)")
+                # Bank header with styling
+                st.markdown(f"###### 🏦 {bank} ({len(info['accounts'])} accounts)")
                 
                 # Display individual accounts
                 for acc in info['accounts']:

@@ -21,9 +21,6 @@ class NaturalLanguageQueryGenerator:
             self.api_key = api_key
         elif hasattr(st, 'secrets') and "anthropic" in st.secrets and "api_key" in st.secrets["anthropic"]:
             self.api_key = st.secrets["anthropic"]["api_key"]
-        else:
-            # Fallback to environment variable
-            self.api_key = os.getenv('ANTHROPIC_API_KEY')
         
         if not self.api_key:
             raise ValueError(
