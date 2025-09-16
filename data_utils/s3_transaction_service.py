@@ -84,7 +84,7 @@ class S3TransactionService(TransactionService):
             self.logger.error(f"Error in bulk update: {e}")
             return 0
     
-    def get_sync_status(self):
+    def get_s3_sync_status(self):
         """Get S3 sync status"""
         return self.db_manager.get_sync_status()
     

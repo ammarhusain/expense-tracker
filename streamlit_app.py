@@ -1182,6 +1182,8 @@ with st.expander("🔧 Account Management", expanded=False):
                     if result.institution_results:
                         for bank, count in result.institution_results.items():
                             st.write(f"• {bank}: {count} transactions")
+                    st.cache_data.clear()
+                    st.rerun()
                 else:
                     st.error("❌ Sync failed:")
                     for error in result.errors:
@@ -1201,6 +1203,8 @@ with st.expander("🔧 Account Management", expanded=False):
                     if result.institution_results:
                         for bank, count in result.institution_results.items():
                             st.write(f"• {bank}: {count} transactions")
+                    st.cache_data.clear()
+                    st.rerun()
                 else:
                     st.error("❌ Sync failed:")
                     for error in result.errors:

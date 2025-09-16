@@ -172,7 +172,9 @@ class TransactionService:
             new_cursor = transactions_data.get('next_cursor')
             if new_cursor:
                 self.data_manager.update_institution_cursor(institution_name, new_cursor)
-                self.data_manager.update_institution_last_sync(institution_name, sync_time.isoformat())
+            
+            # Always update last sync time, regardless of whether there's a new cursor
+            self.data_manager.update_institution_last_sync(institution_name, sync_time.isoformat())
             
             self.logger.info(f"Synced {len(processed_ids)} transactions from {institution_name}")
             

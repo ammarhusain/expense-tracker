@@ -1,25 +1,22 @@
-import os
-from dotenv import load_dotenv
+import streamlit as st
 from dataclasses import dataclass
 from typing import Dict, List
-
-load_dotenv()
 
 @dataclass
 class Config:
     # Plaid API configuration
-    plaid_client_id: str = os.getenv("PLAID_CLIENT_ID", "")
-    plaid_secret: str = os.getenv("PLAID_SECRET", "")
-    plaid_env: str = os.getenv("PLAID_ENV", "sandbox")
+    plaid_client_id: str = st.secrets.get("plaid", {}).get("client_id", "")
+    plaid_secret: str = st.secrets.get("plaid", {}).get("secret", "")
+    plaid_env: str = st.secrets.get("plaid", {}).get("env", "sandbox")
     
     # Data storage configuration - single path, format determined by extension
-    data_path: str = os.getenv("DATA_PATH", "./data/transactions.db")  # .db = SQLite
+    data_path: str = st.secrets.get("DATA_PATH", "./data/transactions.db")  # .db = SQLite
         
     # SQLite configuration
-    sqlite_timeout: float = float(os.getenv("SQLITE_TIMEOUT", "60.0"))
+    sqlite_timeout: float = float(st.secrets.get("SQLITE_TIMEOUT", "60.0"))
     
     # General configuration
-    sync_interval_hours: int = int(os.getenv("SYNC_INTERVAL_HOURS", "24"))
+    sync_interval_hours: int = int(st.secrets.get("SYNC_INTERVAL_HOURS", "24"))
     
 
 config = Config()
