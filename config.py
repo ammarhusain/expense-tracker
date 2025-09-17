@@ -214,7 +214,6 @@ TAG_DEFINITIONS = {
     "gift": "Purchases intended as gifts for others",
     "recurring": "Regular recurring expense",
     "large_purchase": "Significant or expensive purchase",
-    "small_purchase": "Minor or inexpensive transaction",
     "cash_back": "Cash back rewards or rebates",
     "refund": "Refund or return of previous purchase"
 }

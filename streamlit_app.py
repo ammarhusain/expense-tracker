@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import os
 import json
+from datetime import date, timedelta
 
 # NEW: Import new architecture with S3 support
 from config import create_services, get_category_mapping, get_all_subcategories, CATEGORY_DEFINITIONS, TAG_DEFINITIONS, get_all_tags
@@ -167,6 +168,18 @@ def load_transactions():
         # Create combined account display column
         if 'bank_name' in df.columns and 'account_name' in df.columns:
             df['account_display'] = df['bank_name'].fillna('') + ' ' + df['account_name'].fillna('')
+        
+        # Create effective_category column: manual_category overrides ai_category
+        if 'manual_category' in df.columns and 'ai_category' in df.columns:
+            df['effective_category'] = df['manual_category'].fillna('').where(
+                df['manual_category'].fillna('').str.strip() != '', 
+                df['ai_category']
+            )
+        elif 'ai_category' in df.columns:
+            df['effective_category'] = df['ai_category']
+        else:
+            df['effective_category'] = 'Uncategorized'
+            
     return df
 
 
@@ -210,7 +223,7 @@ with st.sidebar:
         
         date_range = st.date_input(
             "Date Range",
-            value=(min_date, "today"),
+            value=(date.today() - timedelta(days=30), "today"),
             min_value=min_date,
             # max_value="tomorrow"
         )
@@ -224,13 +237,13 @@ with st.sidebar:
         df_filtered = df
     
     # Category filter
-    if 'ai_category' in df_filtered.columns:
+    if 'effective_category' in df_filtered.columns:
         categories = st.multiselect(
             "Categories",
-            options=sorted(df_filtered['ai_category'].dropna().unique()),
-            default=sorted(df_filtered['ai_category'].dropna().unique())
+            options=sorted(df_filtered['effective_category'].dropna().unique()),
+            default=sorted(df_filtered['effective_category'].dropna().unique())
         )
-        df_filtered = df_filtered[df_filtered['ai_category'].isin(categories)]
+        df_filtered = df_filtered[df_filtered['effective_category'].isin(categories)]
     
     # Account filter
     if 'account_display' in df_filtered.columns:
@@ -303,7 +316,7 @@ with st.expander("📊 Financial Overview", expanded=True):
     # Filter out transfer transactions for financial overview metrics
     category_mapping = get_category_mapping()
     transfer_categories = category_mapping.get("transfers", [])
-    overview_data = df_filtered[~df_filtered['ai_category'].isin(transfer_categories)].copy()
+    overview_data = df_filtered[~df_filtered['effective_category'].isin(transfer_categories)].copy()
     
     # Key metrics row
     col1, col2, col3, col4 = st.columns(4)
@@ -365,7 +378,7 @@ with st.expander("📈 Spending Analysis", expanded=True):
     # Filter out transfer transactions from spending analysis
     category_mapping = get_category_mapping()
     transfer_categories = category_mapping.get("transfers", [])
-    analysis_data = df_filtered[~df_filtered['ai_category'].isin(transfer_categories)].copy()
+    analysis_data = df_filtered[~df_filtered['effective_category'].isin(transfer_categories)].copy()
     
     # Prepare data for comprehensive sunburst
     income_data = analysis_data[analysis_data['amount'] < 0].copy()
@@ -405,10 +418,10 @@ with st.expander("📈 Spending Analysis", expanded=True):
             
             # Group income by parent categories
             income_parent_totals = {}
-            income_by_category = income_data.groupby('ai_category')['amount'].sum().abs()
+            income_by_category = income_data.groupby('effective_category')['amount'].sum().abs()
             
-            for ai_cat, amount in income_by_category.items():
-                parent_cat = ai_to_parent.get(ai_cat, 'other')
+            for effective_cat, amount in income_by_category.items():
+                parent_cat = ai_to_parent.get(effective_cat, 'other')
                 if parent_cat not in income_parent_totals:
                     income_parent_totals[parent_cat] = 0
                 income_parent_totals[parent_cat] += amount
@@ -422,12 +435,12 @@ with st.expander("📈 Spending Analysis", expanded=True):
                     'values': total_amount
                 })
             
-            # Add income AI category nodes
-            for ai_cat, amount in income_by_category.items():
-                parent_cat = ai_to_parent.get(ai_cat, 'other')
+            # Add income effective category nodes
+            for effective_cat, amount in income_by_category.items():
+                parent_cat = ai_to_parent.get(effective_cat, 'other')
                 flow_data.append({
-                    'ids': f"income_ai_{ai_cat}",
-                    'labels': f"{ai_cat}: ${amount:,.0f}",
+                    'ids': f"income_effective_{effective_cat}",
+                    'labels': f"{effective_cat}: ${amount:,.0f}",
                     'parents': f"income_parent_{parent_cat}",
                     'values': amount
                 })
@@ -444,10 +457,10 @@ with st.expander("📈 Spending Analysis", expanded=True):
             
             # Group expenses by parent categories
             expense_parent_totals = {}
-            expense_by_category = expense_data.groupby('ai_category')['amount'].sum()
+            expense_by_category = expense_data.groupby('effective_category')['amount'].sum()
             
-            for ai_cat, amount in expense_by_category.items():
-                parent_cat = ai_to_parent.get(ai_cat, 'other')
+            for effective_cat, amount in expense_by_category.items():
+                parent_cat = ai_to_parent.get(effective_cat, 'other')
                 if parent_cat not in expense_parent_totals:
                     expense_parent_totals[parent_cat] = 0
                 expense_parent_totals[parent_cat] += amount
@@ -461,12 +474,12 @@ with st.expander("📈 Spending Analysis", expanded=True):
                     'values': total_amount
                 })
             
-            # Add expense AI category nodes
-            for ai_cat, amount in expense_by_category.items():
-                parent_cat = ai_to_parent.get(ai_cat, 'other')
+            # Add expense effective category nodes
+            for effective_cat, amount in expense_by_category.items():
+                parent_cat = ai_to_parent.get(effective_cat, 'other')
                 flow_data.append({
-                    'ids': f"expense_ai_{ai_cat}",
-                    'labels': f"{ai_cat}: ${amount:,.0f}",
+                    'ids': f"expense_effective_{effective_cat}",
+                    'labels': f"{effective_cat}: ${amount:,.0f}",
                     'parents': f"expense_parent_{parent_cat}",
                     'values': amount
                 })
@@ -564,8 +577,8 @@ with st.expander("💡 Quick Insights", expanded=False):
         
         with col1:
             # Top spending categories
-            if 'ai_category' in df_filtered.columns:
-                spending_by_cat = df_filtered[df_filtered['amount'] > 0].groupby('ai_category')['amount'].sum().sort_values(ascending=False).head(5)
+            if 'effective_category' in df_filtered.columns:
+                spending_by_cat = df_filtered[df_filtered['amount'] > 0].groupby('effective_category')['amount'].sum().sort_values(ascending=False).head(5)
                 st.write("**Top 5 Spending Categories:**")
                 for cat, amount in spending_by_cat.items():
                     st.write(f"• {cat}: ${amount:,.2f}")
@@ -968,13 +981,13 @@ GROUP BY substr(date, 1, 7)
 ORDER BY month DESC
 LIMIT 12;""",
             "Top spending categories": """SELECT 
-    COALESCE(ai_category, 'Uncategorized') as category,
+    COALESCE(manual_category, ai_category, 'Uncategorized') as category,
     COUNT(*) as transaction_count,
     SUM(amount) as total_spent,
     AVG(amount) as avg_amount
 FROM transactions 
 WHERE amount > 0
-GROUP BY COALESCE(ai_category, 'Uncategorized')
+GROUP BY COALESCE(manual_category, ai_category, 'Uncategorized')
 ORDER BY total_spent DESC
 LIMIT 10;""",
             "Account balances and activity": """SELECT 
@@ -993,7 +1006,7 @@ ORDER BY a.bank_name, a.account_name;""",
     t.name,
     t.merchant_name,
     t.amount,
-    t.ai_category,
+    COALESCE(t.manual_category, t.ai_category, 'Uncategorized') as effective_category,
     a.bank_name,
     a.account_name
 FROM transactions t
@@ -1005,7 +1018,7 @@ LIMIT 20;""",
     t.date,
     t.name,
     t.amount,
-    t.ai_category,
+    COALESCE(t.manual_category, t.ai_category, 'Uncategorized') as effective_category,
     a.bank_name,
     a.account_name
 FROM transactions t
@@ -1014,12 +1027,12 @@ WHERE t.pending = 1
 ORDER BY t.date DESC;""",
             "Monthly spending trends by category": """SELECT 
     substr(t.date, 1, 7) as month,
-    COALESCE(t.ai_category, 'Uncategorized') as category,
+    COALESCE(t.manual_category, t.ai_category, 'Uncategorized') as effective_category,
     SUM(t.amount) as total_spent,
     COUNT(*) as transaction_count
 FROM transactions t
 WHERE t.amount > 0
-GROUP BY substr(t.date, 1, 7), COALESCE(t.ai_category, 'Uncategorized')
+GROUP BY substr(t.date, 1, 7), COALESCE(t.manual_category, t.ai_category, 'Uncategorized')
 ORDER BY month DESC, total_spent DESC;""",
             "Show database schema": """SELECT name, type, sql 
 FROM sqlite_master 
