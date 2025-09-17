@@ -1221,6 +1221,56 @@ class SqliteDataManager:
             'Uncategorized'
         )
     
+    def update_ai_category_with_tags(self, transaction_id: str, category: str, reason: str = None, ai_tags: list = None) -> bool:
+        """
+        Update AI category and append AI-generated tags to existing tags without duplicates.
+        
+        Args:
+            transaction_id: Transaction ID to update
+            category: AI-generated category
+            reason: AI reasoning (optional)
+            ai_tags: List of AI-generated tags to append (optional)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Get current transaction data
+            current = self.read_by_id(transaction_id)
+            if not current:
+                self.logger.error(f"Transaction {transaction_id} not found")
+                return False
+            
+            # Start with category and reason updates
+            updates = {'ai_category': category}
+            if reason:
+                updates['ai_reason'] = reason
+            
+            # Handle tag appending if AI generated tags
+            if ai_tags and isinstance(ai_tags, list):
+                # Get existing tags
+                existing_tags_json = current.get('tags', '[]')
+                existing_tags = self._parse_tags_from_db(existing_tags_json)
+                
+                # Merge existing tags with new AI tags, removing duplicates while preserving order
+                # Start with existing tags, then add new tags that aren't already present
+                merged_tags = existing_tags.copy()
+                for new_tag in ai_tags:
+                    if new_tag not in merged_tags:
+                        merged_tags.append(new_tag)
+                
+                # Convert back to JSON format for storage
+                updates['tags'] = json.dumps(merged_tags)
+                
+                self.logger.info(f"Merging tags for {transaction_id}: existing {existing_tags} + new {ai_tags} = final {merged_tags}")
+            
+            # Use the regular update method with our prepared updates
+            return self.update_by_id(transaction_id, updates)
+            
+        except Exception as e:
+            self.logger.error(f"Error updating AI category with tags for {transaction_id}: {e}")
+            return False
+    
     def find_potential_transfers(self, transaction_id: str, amount: float, date: str, 
                                account_id: str, days_window: int = 3) -> List[Dict]:
         """

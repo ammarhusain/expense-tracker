@@ -6,7 +6,7 @@ import pandas as pd
 import anthropic
 from datetime import datetime
 import streamlit as st
-from config import CATEGORY_DEFINITIONS, create_data_manager
+from config import CATEGORY_DEFINITIONS, TAG_DEFINITIONS, get_all_tags, validate_tags, create_data_manager
 from transaction_types import Transaction
 import time
 
@@ -102,6 +102,15 @@ class TransactionLLMCategorizer:
         
         # Remove the last empty line
         return "\n".join(sections[:-1])
+    
+    def _generate_tag_section(self) -> str:
+        """Generate tag section for prompt from TAG_DEFINITIONS"""
+        sections = []
+        
+        for tag, description in TAG_DEFINITIONS.items():
+            sections.append(f"**{tag}**: {description}")
+        
+        return "\n".join(sections)
 
     def _format_transaction_context(self, transaction: Transaction, potential_transfers: list = None) -> str:
         """Format transaction data into a context string for the LLM with optional transfer context"""
@@ -126,14 +135,16 @@ class TransactionLLMCategorizer:
         plaid_category_str = plaid_category_str.replace("leg_cgr:", "Legacy Category:")
         plaid_category_str = plaid_category_str.replace("leg_det:", "Legacy Detailed Category:")
         
-        # Generate dynamic categories section
+        # Generate dynamic categories and tags sections
         categories_section = self._generate_category_section()
+        tags_section = self._generate_tag_section()
         
-        # Replace categories placeholder first, then format the rest
-        prompt_with_categories = self.prompt_template.replace("{{CATEGORIES}}", categories_section)
+        # Replace categories and tags placeholders first, then format the rest
+        prompt_with_placeholders = self.prompt_template.replace("{{CATEGORIES}}", categories_section)
+        prompt_with_placeholders = prompt_with_placeholders.replace("{{TAGS}}", tags_section)
         
         # Build the base prompt with all placeholders filled
-        base_prompt = prompt_with_categories.format(
+        base_prompt = prompt_with_placeholders.format(
             date=date,
             name=name,
             original_description=original_description,
@@ -214,7 +225,22 @@ class TransactionLLMCategorizer:
                 if result['category'] not in valid_categories:
                     self.logger.error(f"Invalid category '{result['category']}' not in valid list")
                     raise ValueError(f"LLM returned invalid category: '{result['category']}'. Must be one of: {valid_categories}")
-                print(f"AI category: {result['category']}")
+                
+                # Handle tags - validate and filter if present
+                if 'tags' in result:
+                    if isinstance(result['tags'], list):
+                        # Validate tags against allowed list
+                        validated_tags = validate_tags(result['tags'])
+                        result['tags'] = validated_tags
+                        self.logger.info(f"AI tags: {result['tags']}")
+                    else:
+                        self.logger.warning(f"Tags field is not a list: {result['tags']}")
+                        result['tags'] = []
+                else:
+                    # Add empty tags if not provided for backward compatibility
+                    result['tags'] = []
+                
+                print(f"AI category: {result['category']}, tags: {result.get('tags', [])}")
                 return result
                 
             else:
@@ -275,5 +301,6 @@ class TransactionLLMCategorizer:
             self.logger.error(f"Failed to parse LLM response: {e}")
             return {
                 'category': 'error',
-                'reasoning': message.content
+                'reasoning': message.content,
+                'tags': []
             }

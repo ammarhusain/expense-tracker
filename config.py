@@ -206,6 +206,19 @@ CATEGORY_DEFINITIONS = {
     }
 }
 
+# Tag definitions for AI-based transaction tagging
+TAG_DEFINITIONS = {
+    "travel": "Travel-related expenses during trips or vacations",
+    "weekend": "Weekend activities and purchases",
+    "holiday": "Holiday-related expenses and celebrations",
+    "gift": "Purchases intended as gifts for others",
+    "recurring": "Regular recurring expense",
+    "large_purchase": "Significant or expensive purchase",
+    "small_purchase": "Minor or inexpensive transaction",
+    "cash_back": "Cash back rewards or rebates",
+    "refund": "Refund or return of previous purchase"
+}
+
 # Helper functions to work with the new structure
 def get_category_mapping() -> Dict[str, List[str]]:
     """Generate category mapping for existing code compatibility"""
@@ -234,3 +247,17 @@ def get_parent_category(subcategory: str) -> str:
         if subcategory in data['subcategories']:
             return parent
     return "other"
+
+# Helper functions for tag management
+def get_all_tags() -> List[str]:
+    """Get flat list of all available tags"""
+    return list(TAG_DEFINITIONS.keys())
+
+def get_tag_description(tag: str) -> str:
+    """Get description for a specific tag"""
+    return TAG_DEFINITIONS.get(tag, "Unknown tag")
+
+def validate_tags(tags: List[str]) -> List[str]:
+    """Validate and filter tags against allowed list"""
+    allowed_tags = get_all_tags()
+    return [tag for tag in tags if tag in allowed_tags]

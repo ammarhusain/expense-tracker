@@ -8,7 +8,7 @@ import os
 import json
 
 # NEW: Import new architecture with S3 support
-from config import create_services, get_category_mapping, get_all_subcategories, CATEGORY_DEFINITIONS
+from config import create_services, get_category_mapping, get_all_subcategories, CATEGORY_DEFINITIONS, TAG_DEFINITIONS, get_all_tags
 from transaction_types import SyncResult
 from data_utils.s3_database_manager import db_manager
 
@@ -587,14 +587,14 @@ with st.expander("🏷️ Transaction Management", expanded=True):
     df_display = df_filtered
     
     # Checkbox to enable editing mode
-    enable_editing = st.checkbox("Make Edits", value=False, help="Check this box to enable editing of AI category, notes, and tags")
+    enable_editing = st.checkbox("Make Edits", value=False, help="Check this box to enable editing of manual category, notes, and tags")
      
     # Display transactions with editing capabilities
     if not df_display.empty:
         if enable_editing:
             # Select columns for editing mode
             display_columns = [
-                'date', 'name', 'merchant_name', 'amount', 'ai_category', 'notes', 'tags',
+                'date', 'name', 'merchant_name', 'amount', 'ai_category', 'manual_category', 'notes', 'tags',
                 'account_display', 'transaction_id'
             ]
             
@@ -604,7 +604,7 @@ with st.expander("🏷️ Transaction Management", expanded=True):
             df_for_editing = df_display[available_columns].reset_index(drop=True).copy()
             
             # Ensure text columns are properly typed as strings to avoid float type errors
-            text_columns = ['ai_category', 'notes', 'tags']
+            text_columns = ['ai_category', 'manual_category', 'notes', 'tags']
             for col in text_columns:
                 if col in df_for_editing.columns:
                     df_for_editing[col] = df_for_editing[col].fillna('').astype(str)
@@ -648,9 +648,14 @@ with st.expander("🏷️ Transaction Management", expanded=True):
                         format="$%.2f",
                         disabled=True
                     ),
-                    "ai_category": st.column_config.SelectboxColumn(
+                    "ai_category": st.column_config.TextColumn(
                         "AI Category",
-                        help="Select AI category",
+                        help="AI-generated category (read-only)",
+                        disabled=True
+                    ),
+                    "manual_category": st.column_config.SelectboxColumn(
+                        "Manual Category",
+                        help="Override AI category with manual selection",
                         options=sorted(all_category_options),
                         required=False
                     ),
@@ -692,8 +697,8 @@ with st.expander("🏷️ Transaction Management", expanded=True):
                         if transaction_id:
                             # Prepare updates for this transaction
                             row_updates = {}
-                            if 'ai_category' in edited_row:
-                                row_updates['ai_category'] = edited_row['ai_category']
+                            if 'manual_category' in edited_row:
+                                row_updates['manual_category'] = edited_row['manual_category']
                             if 'notes' in edited_row:
                                 row_updates['notes'] = edited_row['notes']
                             if 'tags' in edited_row:
@@ -722,7 +727,7 @@ with st.expander("🏷️ Transaction Management", expanded=True):
         else:
             # Display read-only comprehensive view
             display_columns = [
-                'date', 'authorized_date', 'name', 'merchant_name', 'amount', 'ai_category', 'notes', 'tags',
+                'date', 'authorized_date', 'name', 'merchant_name', 'amount', 'ai_category', 'manual_category', 'notes', 'tags',
                 'ai_reason', 'plaid_category', 'account_display', 'pending', 'transaction_id'
             ]
             
@@ -762,6 +767,10 @@ with st.expander("🏷️ Transaction Management", expanded=True):
                     ),
                     "ai_category": st.column_config.TextColumn(
                         "AI Category"
+                    ),
+                    "manual_category": st.column_config.TextColumn(
+                        "Manual Category",
+                        help="Manual category override"
                     ),
                     "ai_reason": st.column_config.TextColumn(
                         "AI Reason",

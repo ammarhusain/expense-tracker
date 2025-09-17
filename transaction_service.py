@@ -359,13 +359,23 @@ class TransactionService:
                     error=result["error"]
                 )
             
-            # Update the transaction with the categorization
-            updates = {
-                'ai_category': result.get('category', ''),
-                'ai_reason': result.get('reasoning', '')
-            }
+            # Update the transaction with the categorization and tags
+            category = result.get('category', '')
+            reasoning = result.get('reasoning', '')
+            ai_tags = result.get('tags', [])
             
-            success = self.data_manager.update_by_id(transaction_id, updates)
+            # Use the new method that properly handles tag appending if AI generated tags
+            if ai_tags:
+                success = self.data_manager.update_ai_category_with_tags(
+                    transaction_id, category, reasoning, ai_tags
+                )
+            else:
+                # No tags - use regular update
+                updates = {
+                    'ai_category': category,
+                    'ai_reason': reasoning
+                }
+                success = self.data_manager.update_by_id(transaction_id, updates)
             
             return CategorizationResult(
                 success=success,
