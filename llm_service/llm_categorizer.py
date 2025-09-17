@@ -4,6 +4,7 @@ import logging
 from typing import Dict, Optional
 import pandas as pd
 import anthropic
+import httpx
 from datetime import datetime
 import streamlit as st
 from config import CATEGORY_DEFINITIONS, TAG_DEFINITIONS, get_all_tags, validate_tags, create_data_manager
@@ -12,31 +13,33 @@ import time
 
 class TransactionLLMCategorizer:
     def __init__(self, api_key: str = None, custom_prompt: str = None):
-        """Initialize the LLM categorizer with Claude API client
+        """Initialize the LLM categorizer with Apple Floodgate proxy client
         
         Args:
-            api_key: Anthropic API key
+            api_key: Unused - Apple Floodgate uses auth token
             custom_prompt: Custom prompt template to use instead of default file
         """
-        # Try to get API key from multiple sources
-        if api_key:
-            self.api_key = api_key
-        elif hasattr(st, 'secrets') and "anthropic" in st.secrets and "api_key" in st.secrets["anthropic"]:
-            self.api_key = st.secrets["anthropic"]["api_key"]
+        # Get authentication token from Apple Connect
+        try:
+            authToken = os.popen('/usr/local/bin/appleconnect getToken -C hvys3fcwcteqrvw3qzkvtk86viuoqv --token-type=oauth --interactivity-type=none -E prod -G pkce -o openid,dsid,accountname,profile,groups').read().split()[-1]
+        except Exception as e:
+            raise ValueError(f"Failed to get Apple authentication token: {str(e)}")
         
-        if not self.api_key:
-            raise ValueError(
-                "Anthropic API key not found. "
-                "Please add it to Streamlit secrets under [anthropic] api_key "
-                "or set ANTHROPIC_API_KEY environment variable."
-            )
+        # Create HTTP client with SSL verification disabled for Apple's internal proxy
+        http_client = httpx.Client(verify=False)
         
-        self.client = anthropic.Anthropic(api_key=self.api_key)
+        # Initialize Anthropic client with Apple Floodgate proxy
+        self.client = anthropic.Anthropic(
+            auth_token=authToken,
+            base_url="https://floodgate.g.apple.com/api/anthropic",
+            http_client=http_client
+        )
+        
         self.data_manager = create_data_manager()  # Use factory pattern
         self.logger = logging.getLogger(__name__)
         
-        # Model configuration
-        self.model = "claude-sonnet-4-20250514"
+        # Model configuration for Apple Floodgate proxy
+        self.model = "anthropic.claude-sonnet-4-20250514-v1:0"
         self.max_tokens = 1500
         
         # Load prompt template - use custom if provided, otherwise load from file
@@ -266,8 +269,9 @@ class TransactionLLMCategorizer:
         """
         # Format context for LLM
         prompt = self._format_transaction_context(transaction, potential_transfers)
+        print(f"****\n{transaction}")
         # print(f"prompt ***\n{prompt}\n****\n")
-        time.sleep(1.0)
+        # time.sleep(1.0)
         # Call Claude API
         message = self.client.messages.create(
             model=self.model,
