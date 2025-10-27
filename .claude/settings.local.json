@@ -10,7 +10,8 @@
       "WebFetch(domain:developer.payments.jpmorgan.com)",
       "Bash(find:*)",
       "Bash(rg:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "WebFetch(domain:genai.apple.com)"
     ],
     "deny": []
   }

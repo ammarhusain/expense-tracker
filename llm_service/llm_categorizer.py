@@ -3,8 +3,7 @@ import json
 import logging
 from typing import Dict, Optional
 import pandas as pd
-import anthropic
-import httpx
+from openai import OpenAI
 from datetime import datetime
 import streamlit as st
 from config import CATEGORY_DEFINITIONS, TAG_DEFINITIONS, get_all_tags, validate_tags, create_data_manager
@@ -13,34 +12,25 @@ import time
 
 class TransactionLLMCategorizer:
     def __init__(self, api_key: str = None, custom_prompt: str = None):
-        """Initialize the LLM categorizer with Apple Floodgate proxy client
+        """Initialize the LLM categorizer with OpenAI API
         
         Args:
-            api_key: Unused - Apple Floodgate uses auth token
+            api_key: OpenAI API key (uses streamlit secrets if not provided)
             custom_prompt: Custom prompt template to use instead of default file
         """
-        # Get authentication token from Apple Connect
-        try:
-            authToken = os.popen('/usr/local/bin/appleconnect getToken -C hvys3fcwcteqrvw3qzkvtk86viuoqv --token-type=oauth --interactivity-type=none -E prod -G pkce -o openid,dsid,accountname,profile,groups').read().split()[-1]
-        except Exception as e:
-            raise ValueError(f"Failed to get Apple authentication token: {str(e)}")
+        # Use provided API key or get from streamlit secrets
+        if api_key:
+            openai_key = api_key
+        else:
+            openai_key = st.secrets["openai"]["api_key"]
+            if not openai_key:
+                raise ValueError("OpenAI API key not found in streamlit secrets. Please add OPENAI_API_KEY to secrets.toml")
         
-        # Create HTTP client with SSL verification disabled for Apple's internal proxy
-        http_client = httpx.Client(verify=False)
-        
-        # Initialize Anthropic client with Apple Floodgate proxy
-        self.client = anthropic.Anthropic(
-            auth_token=authToken,
-            base_url="https://floodgate.g.apple.com/api/anthropic",
-            http_client=http_client
-        )
+        # Initialize OpenAI client
+        self.client = OpenAI(api_key=openai_key)
         
         self.data_manager = create_data_manager()  # Use factory pattern
         self.logger = logging.getLogger(__name__)
-        
-        # Model configuration for Apple Floodgate proxy
-        self.model = "anthropic.claude-sonnet-4-20250514-v1:0"
-        self.max_tokens = 1500
         
         # Load prompt template - use custom if provided, otherwise load from file
         if custom_prompt:
@@ -269,34 +259,25 @@ class TransactionLLMCategorizer:
         """
         # Format context for LLM
         prompt = self._format_transaction_context(transaction, potential_transfers)
-        print(f"****\n{transaction}")
+        # st.text(f"****\n{transaction}")
         # print(f"prompt ***\n{prompt}\n****\n")
-        # time.sleep(1.0)
-        # Call Claude API
-        message = self.client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=0.1,
-            messages=[{"role": "user", "content": prompt}],
-            tools=[{
-                "type": "web_search_20250305",
-                "name": "web_search"
-            }]
+
+        # Call OpenAI API with web search
+        response = self.client.responses.create(
+            model="gpt-5",
+            input= prompt,
+            max_output_tokens=1500,
+            # temperature=0.1,
+            tools=[{"type": "web_search"}]
         )
 
-        # print(f"response_msg {message}")
+        # st.text(f"response_msg {response}")
 
         # Parse and return response - handle both direct text and tool use responses
-        if hasattr(message.content[0], 'text'):
-            # Direct text response
-            response_text = message.content[0].text
+        if response.output[-1].content[0].text:
+            response_text = response.output[-1].content[0].text
         else:
-            # Tool use response - find the final text block
-            text_blocks = [block for block in message.content if hasattr(block, 'text')]
-            if text_blocks:
-                response_text = text_blocks[-1].text  # Get the last text response
-            else:
-                raise ValueError("No text response found in LLM output")
+            raise ValueError("No text response found in OpenAI output")
 
         try:
             return self._parse_llm_response(response_text)
@@ -305,6 +286,6 @@ class TransactionLLMCategorizer:
             self.logger.error(f"Failed to parse LLM response: {e}")
             return {
                 'category': 'error',
-                'reasoning': message.content,
+                'reasoning': str(response),
                 'tags': []
             }
